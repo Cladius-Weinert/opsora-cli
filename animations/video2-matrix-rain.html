@@ -1,0 +1,232 @@
+<!DOCTYPE html><html><head><style>
+*{margin:0;padding:0}
+body{background:#000800;overflow:hidden;font-family:'Courier New',monospace}
+canvas{display:block}
+</style></head><body><canvas id="c"></canvas>
+<script>
+const W=1080,H=1920;
+const c=document.getElementById('c');c.width=W;c.height=H;
+const ctx=c.getContext('2d');
+let t=0;
+
+// Matrix rain columns
+const cols=Math.floor(W/18);
+const drops=[];
+for(let i=0;i<cols;i++){
+  drops.push({y:Math.random()*H,sp:Math.random()*4+2,chars:[]});
+  for(let j=0;j<50;j++){
+    drops[i].chars.push(String.fromCharCode(0x30A0+Math.random()*96));
+  }
+}
+
+// Opsora system nodes - appear in sequence
+const sequence=[
+  {time:1,node:{x:540,y:960,r:100,label:'OPSORA\nBRAIN',color:'#00ff41',icon:'🧠'}},
+  {time:3,node:{x:200,y:600,r:55,label:'Docker',color:'#2496ed',icon:'🐳'}},
+  {time:4,node:{x:540,y:600,r:55,label:'Ollama',color:'#00ff41',icon:'🤖'}},
+  {time:5,node:{x:880,y:600,r:55,label:'NVIDIA',color:'#76b900',icon:'⚡'}},
+  {time:7,node:{x:150,y:1200,r:50,label:'AWS EC2',color:'#ff9900',icon:'☁️'}},
+  {time:8,node:{x:400,y:1200,r:50,label:'S3',color:'#ff9900',icon:'📦'}},
+  {time:9,node:{x:680,y:1200,r:50,label:'Windows',color:'#00bcd4',icon:'🖥️'}},
+  {time:10,node:{x:930,y:1200,r:50,label:'RDP',color:'#e91e63',icon:'🌐'}},
+  {time:12,node:{x:200,y:1500,r:45,label:'CLI v2',color:'#bb86fc',icon:'⌨️'}},
+  {time:13,node:{x:450,y:1500,r:45,label:'Agent',color:'#03dac6',icon:'🕵️'}},
+  {time:14,node:{x:700,y:1500,r:45,label:'47 Skills',color:'#cf6679',icon:'🎯'}},
+  {time:15,node:{x:930,y:1500,r:45,label:'MCP',color:'#ffd700',icon:'🔌'}},
+];
+
+const connections=[
+  [0,1],[0,2],[0,3],[0,4],[0,5],[0,6],[0,7],
+  [1,8],[2,8],[3,10],[4,4],[6,9],[7,6]
+];
+
+// Data stream text
+const dataLines=[
+  '> aws ec2 describe-instances...',
+  '> ssm send-command --windows...',
+  '> docker ps | 8 containers ✓',
+  '> ollama list | 7 models ✓',
+  '> nvidia api | llama-70b ✓',
+  '> playwright chromium | ✓',
+  '> opsora-cli v2 | codex mode',
+  '> instances --all | 6 found',
+  '> win-agent "check gmail"...',
+  '> graphify query --depth 3',
+  '> memory search "architecture"',
+  '> terraform apply --auto',
+  '> gh pr list | 3 open',
+  '> guacamole :8888 | rdp ok',
+  '> n8n workflow | running',
+  '> qdrant vectors | 49MB',
+];
+
+function drawMatrixRain(time){
+  ctx.fillStyle='rgba(0,8,0,0.08)';
+  ctx.fillRect(0,0,W,H);
+  
+  drops.forEach((drop,i)=>{
+    const x=i*18;
+    drop.y+=drop.sp;
+    if(drop.y>H+200)drop.y=-200;
+    
+    for(let j=0;j<20;j++){
+      const y=drop.y-j*18;
+      if(y<0||y>H)continue;
+      
+      const alpha=j===0?1:Math.max(0,0.8-j*0.06);
+      const green=j===0?'#ffffff':`rgba(0,${200+Math.random()*55},0,${alpha})`;
+      
+      ctx.fillStyle=green;
+      ctx.font='14px monospace';
+      const charIdx=Math.floor(time*10+j+i)%drop.chars.length;
+      ctx.fillText(drop.chars[charIdx],x,y);
+    }
+  });
+}
+
+function drawNode(node,time,appearTime){
+  const age=time-appearTime;
+  if(age<0)return;
+  
+  const scale=Math.min(1,age*3);
+  const pulse=Math.sin(time*4)*0.1+1;
+  const r=node.r*scale*pulse;
+  
+  // Glitch effect on appear
+  if(age<0.5){
+    const glitch=Math.random()*20-10;
+    ctx.save();
+    ctx.translate(glitch,0);
+  }
+  
+  // Glow
+  const grad=ctx.createRadialGradient(node.x,node.y,0,node.x,node.y,r*2);
+  grad.addColorStop(0,node.color+'44');
+  grad.addColorStop(1,'transparent');
+  ctx.fillStyle=grad;
+  ctx.beginPath();
+  ctx.arc(node.x,node.y,r*2,0,Math.PI*2);
+  ctx.fill();
+  
+  // Box
+  ctx.strokeStyle=node.color;
+  ctx.lineWidth=2;
+  ctx.shadowColor=node.color;
+  ctx.shadowBlur=15;
+  ctx.strokeRect(node.x-r,node.y-r*0.6,r*2,r*1.2);
+  ctx.shadowBlur=0;
+  
+  // Fill
+  ctx.fillStyle='rgba(0,20,0,0.8)';
+  ctx.fillRect(node.x-r+2,node.y-r*0.6+2,r*2-4,r*1.2-4);
+  
+  // Icon + Label
+  ctx.textAlign='center';
+  ctx.textBaseline='middle';
+  ctx.font='24px sans-serif';
+  ctx.fillStyle='#ffffff';
+  ctx.fillText(node.icon,node.x,node.y-12);
+  
+  ctx.font='bold 13px monospace';
+  ctx.fillStyle=node.color;
+  ctx.fillText(node.label.split('\n')[0],node.x,node.y+18);
+  
+  if(age<0.5)ctx.restore();
+}
+
+function drawDataStreams(time){
+  const baseY=250;
+  ctx.font='13px monospace';
+  
+  for(let i=0;i<8;i++){
+    const y=baseY+i*22;
+    const lineIdx=Math.floor(time*2+i)%dataLines.length;
+    const alpha=0.3+Math.sin(time*3+i)*0.3;
+    ctx.fillStyle=`rgba(0,255,65,${alpha})`;
+    ctx.fillText(dataLines[lineIdx],30,y);
+  }
+}
+
+function drawTitle(time){
+  const fadeIn=Math.min(1,time);
+  ctx.save();
+  ctx.globalAlpha=fadeIn;
+  ctx.textAlign='center';
+  
+  // Title with scanline effect
+  ctx.font='bold 56px "Courier New"';
+  ctx.fillStyle='#00ff41';
+  ctx.shadowColor='#00ff41';
+  ctx.shadowBlur=25;
+  ctx.fillText('OPSORA',W/2,100);
+  ctx.shadowBlur=0;
+  
+  ctx.font='22px monospace';
+  ctx.fillStyle='#00ff4188';
+  ctx.fillText('[ DATA STREAM ACTIVE ]',W/2,145);
+  
+  // Beat counter
+  const beat=Math.floor(time*2);
+  ctx.font='14px monospace';
+  ctx.fillStyle=`rgba(0,255,65,${0.3+Math.sin(time*4)*0.4})`;
+  ctx.fillText(`♪ HAPPY NATION ♪ — beat ${beat}`,W/2,180);
+  
+  // Bottom
+  ctx.font='12px monospace';
+  ctx.fillStyle='#00ff4144';
+  ctx.fillText('system.init() → all_resources.connect() → yolo_mode.activate()',W/2,1860);
+  ctx.fillText('opsora v2.0 | codex/cursor edition | 2026',W/2,1885);
+  
+  ctx.restore();
+}
+
+function drawConnections(time){
+  const activeNodes=sequence.filter(s=>time>=s.time);
+  
+  connections.forEach(([a,b])=>{
+    if(a>=activeNodes.length||b>=activeNodes.length)return;
+    const na=activeNodes[a].node, nb=activeNodes[b].node;
+    
+    ctx.beginPath();
+    ctx.moveTo(na.x,na.y);
+    ctx.lineTo(nb.x,nb.y);
+    ctx.strokeStyle=`rgba(0,255,65,${0.1+Math.sin(time*3)*0.1})`;
+    ctx.lineWidth=1;
+    ctx.stroke();
+    
+    // Data packet
+    const travel=(time*0.8+a*0.2)%1;
+    const px=na.x+(nb.x-na.x)*travel;
+    const py=na.y+(nb.y-na.y)*travel;
+    ctx.beginPath();
+    ctx.arc(px,py,3,0,Math.PI*2);
+    ctx.fillStyle='#00ff41';
+    ctx.fill();
+  });
+}
+
+function animate(){
+  t+=1/60;
+  
+  drawMatrixRain(t);
+  
+  // Clear area for title and nodes
+  ctx.fillStyle='rgba(0,8,0,0.4)';
+  ctx.fillRect(0,0,W,200);
+  ctx.fillRect(0,400,W,1400);
+  
+  drawDataStreams(t);
+  drawConnections(t);
+  
+  // Draw nodes in sequence
+  sequence.forEach(s=>{
+    drawNode(s.node,t,s.time);
+  });
+  
+  drawTitle(t);
+  
+  if(t<30)requestAnimationFrame(animate);
+}
+
+animate();
+</script></body></html>

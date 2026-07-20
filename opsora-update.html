@@ -1,0 +1,124 @@
+<div style="background:#0d1117;color:#c9d1d9;font-family:monospace;padding:20px;max-width:900px;margin:0 auto;">
+
+<h1 style="color:#58a6ff;border-bottom:2px solid #30363d;padding-bottom:10px;">🚀 OPSORA COMPLETE SYSTEM UPDATE</h1>
+<p style="color:#8b949e;">Last updated: 2026-07-20 | Account: 134748917746 | Region: us-east-1</p>
+
+<h2 style="color:#58a6ff;">🏗️ System Architecture</h2>
+<pre style="background:#161b22;padding:15px;border-radius:8px;border:1px solid #30363d;overflow-x:auto;font-size:13px;">
+┌───────────────────────────────────────────────────┐
+│           OPSORA-BRAIN (us-east-1)                 │
+│           r5.2xlarge | Linux | 98.94.100.100      │
+│                                                    │
+│  CLI v2 │ Instance CMD │ Win Agent │ Gmail/API    │
+│  Ollama (7 models) │ NVIDIA API │ Kimchi v0.1.72 │
+│  Docker: 8 containers │ 6 ports │ 47 skills       │
+│  AWS: 6 instances │ 11 S3 │ Bedrock proxy         │
+└────────┬────────────────────────┬──────────────────┘
+         │ SSM                    │ RDP/Guacamole
+         ▼                        ▼
+┌─────────────────────┐  ┌─────────────────────┐
+│ rdp-windows-prod    │  │ 4 Stopped Instances  │
+│ us-west-2 | SSM ✅  │  │ pw-agent, cloudpc,   │
+│ Playwright + Node   │  │ termux, model-vps    │
+└─────────────────────┘  └─────────────────────┘
+</pre>
+
+<h2 style="color:#58a6ff;">🤖 AI Providers</h2>
+<table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+<tr style="border-bottom:1px solid #30363d;"><th style="text-align:left;padding:8px;color:#58a6ff;">Provider</th><th>Model</th><th>Status</th></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;"><b>NVIDIA</b></td><td>llama-3.1-70b-instruct</td><td style="color:#3fb950;">✅ Working</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;"><b>Ollama</b></td><td>7 models (37GB)</td><td style="color:#3fb950;">✅ Running</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;"><b>Alibaba</b></td><td>6 keys (3 variants)</td><td style="color:#f85149;">❌ Expired</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;"><b>OpenAI</b></td><td>Wrong key (DashScope)</td><td style="color:#f85149;">❌ Expired</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;"><b>DeepSeek</b></td><td>deepseek-chat</td><td style="color:#d29922;">⏳ Untested</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;"><b>Groq</b></td><td>llama-3.1-70b</td><td style="color:#d29922;">⏳ Untested</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;"><b>OpenRouter</b></td><td>qwen-2.5-72b</td><td style="color:#d29922;">⏳ Untested</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;"><b>ZhipuAI</b></td><td>glm-4-flash</td><td style="color:#d29922;">⏳ Untested</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;"><b>MiniMax</b></td><td>MiniMax-Text-01</td><td style="color:#d29922;">⏳ Untested</td></tr>
+</table>
+
+<h3 style="color:#8b949e;">Ollama Models</h3>
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:20px;">
+<div style="background:#161b22;padding:10px;border-radius:6px;border:1px solid #30363d;text-align:center;">
+<div style="color:#3fb950;font-weight:bold;">qwen2.5-coder</div><div style="color:#8b949e;">32b • 18.5GB</div>
+</div>
+<div style="background:#161b22;padding:10px;border-radius:6px;border:1px solid #30363d;text-align:center;">
+<div style="color:#3fb950;font-weight:bold;">llama3.1</div><div style="color:#8b949e;">latest • 4.6GB</div>
+</div>
+<div style="background:#161b22;padding:10px;border-radius:6px;border:1px solid #30363d;text-align:center;">
+<div style="color:#3fb950;font-weight:bold;">llama3</div><div style="color:#8b949e;">latest • 4.3GB</div>
+</div>
+<div style="background:#161b22;padding:10px;border-radius:6px;border:1px solid #30363d;text-align:center;">
+<div style="color:#3fb950;font-weight:bold;">qwen3.5</div><div style="color:#8b949e;">4b • 3.2GB</div>
+</div>
+</div>
+
+<h2 style="color:#58a6ff;">☁️ EC2 Instances (6)</h2>
+<table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+<tr style="border-bottom:1px solid #30363d;"><th style="text-align:left;padding:8px;color:#58a6ff;">Name</th><th>Type</th><th>Region</th><th>State</th></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;"><b>opsora-brain</b> ← this</td><td>r5.2xlarge</td><td>us-east-1</td><td style="color:#3fb950;">🟢 Running</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;"><b>rdp-windows-prod</b></td><td>m5zn.2xlarge</td><td>us-west-2</td><td style="color:#3fb950;">🟢 Running</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;">pw-agent-vps</td><td>m7i-flex.large</td><td>us-east-1</td><td style="color:#f85149;">🔴 Stopped</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;">cloudpc-ec2-win</td><td>m5.xlarge</td><td>us-east-1</td><td style="color:#f85149;">🔴 Stopped</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;">opsora-model-vps</td><td>m7i-flex.large</td><td>us-east-1</td><td style="color:#f85149;">🔴 Stopped</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;">my-termux-vm</td><td>t3.micro</td><td>us-east-1</td><td style="color:#f85149;">🔴 Stopped</td></tr>
+</table>
+
+<h2 style="color:#58a6ff;">🐳 Docker (8 containers | 6 ports)</h2>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:20px;">
+<div style="background:#161b22;padding:10px;border-radius:6px;border:1px solid #30363d;">
+<div style="color:#3fb950;">✅ Guacamole</div><div style="color:#8b949e;">:8888 — RDP Web</div>
+</div>
+<div style="background:#161b22;padding:10px;border-radius:6px;border:1px solid #30363d;">
+<div style="color:#3fb950;">✅ Open WebUI</div><div style="color:#8b949e;">:3000 — AI Chat</div>
+</div>
+<div style="background:#161b22;padding:10px;border-radius:6px;border:1px solid #30363d;">
+<div style="color:#3fb950;">✅ N8N</div><div style="color:#8b949e;">:5678 — Workflows</div>
+</div>
+<div style="background:#161b22;padding:10px;border-radius:6px;border:1px solid #30363d;">
+<div style="color:#3fb950;">✅ Dashboard</div><div style="color:#8b949e;">:8000 — Constituency</div>
+</div>
+<div style="background:#161b22;padding:10px;border-radius:6px;border:1px solid #30363d;">
+<div style="color:#3fb950;">✅ Qdrant</div><div style="color:#8b949e;">:6333 — Vector DB</div>
+</div>
+<div style="background:#161b22;padding:10px;border-radius:6px;border:1px solid #30363d;">
+<div style="color:#3fb950;">✅ Ollama</div><div style="color:#8b949e;">:11434 — Local AI</div>
+</div>
+</div>
+
+<h2 style="color:#58a6ff;">🛠️ Tools Built Today</h2>
+<table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+<tr style="border-bottom:1px solid #30363d;"><th style="text-align:left;padding:8px;color:#58a6ff;">Tool</th><th>Command</th><th>Purpose</th></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;">Opsora CLI v2</td><td><code>opsora</code></td><td>Codex-style AI assistant</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;">Instance Command Center</td><td><code>instances</code></td><td>Manage all 6 EC2 instances</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;">Windows Agent</td><td><code>win-agent "task"</code></td><td>Autonomous browser (OpenClaw-style)</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;">Guacamole RDP</td><td>http://:8888</td><td>Browser-based remote desktop</td></tr>
+<tr style="border-bottom:1px solid #21262d;"><td style="padding:8px;">GitHub CLI</td><td><code>gh</code> v2.96.0</td><td>Updated from 2.4.0</td></tr>
+</table>
+
+<h2 style="color:#58a6ff;">🧹 Cleanup Summary</h2>
+<div style="background:#161b22;padding:15px;border-radius:8px;border:1px solid #30363d;margin-bottom:20px;">
+<div style="display:flex;justify-content:space-between;margin-bottom:8px;"><span>__pycache__ (root + projects)</span><span style="color:#3fb950;">68KB freed</span></div>
+<div style="display:flex;justify-content:space-between;margin-bottom:8px;"><span>Corrupt files (.pyo, .pyxY, accept:)</span><span style="color:#3fb950;">4KB freed</span></div>
+<div style="display:flex;justify-content:space-between;margin-bottom:8px;"><span>Empty snap dirs</span><span style="color:#3fb950;">24KB freed</span></div>
+<div style="display:flex;justify-content:space-between;margin-bottom:8px;"><span>Docker images pruned</span><span style="color:#3fb950;">700MB freed</span></div>
+<div style="display:flex;justify-content:space-between;border-top:1px solid #30363d;padding-top:8px;margin-top:8px;"><b>Total reclaimed</b><b style="color:#3fb950;">~1.24GB</b></div>
+</div>
+
+<h2 style="color:#f85149;">⚠️ Needs Your Action</h2>
+<div style="background:#1c1210;padding:15px;border-radius:8px;border:1px solid #6e3a2e;margin-bottom:20px;">
+<ol style="margin:0;padding-left:20px;">
+<li style="margin-bottom:8px;">Rotate <b>expired Alibaba DashScope keys</b> (all 6 invalid)</li>
+<li style="margin-bottom:8px;">Fix <b>OpenAI key</b> (currently using DashScope key)</li>
+<li style="margin-bottom:8px;">Test untested providers: DeepSeek, Groq, OpenRouter, ZhipuAI, MiniMax</li>
+<li style="margin-bottom:8px;">Rotate <b>AWS profiles</b>: root1, root2, opsora_2 (expired credentials)</li>
+<li style="margin-bottom:8px;">Login <b>Gmail manually</b> via Guacamole RDP (one-time setup)</li>
+</ol>
+</div>
+
+<div style="text-align:center;color:#8b949e;padding:20px;border-top:1px solid #30363d;">
+<b style="color:#58a6ff;">OPSORA</b> v2.0 — Codex/Cursor Edition<br>
+6 instances • 11 S3 buckets • 8 containers • 7 Ollama models • 47 skills • 9 AI providers
+</div>
+
+</div>

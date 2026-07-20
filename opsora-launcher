@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Stable global launcher for the local Opsora implementation.
+set -euo pipefail
+
+exec /home/ubuntu/.local/bin/opsora "$@"

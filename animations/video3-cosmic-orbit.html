@@ -1,0 +1,268 @@
+<!DOCTYPE html><html><head><style>
+*{margin:0;padding:0}
+body{background:#030012;overflow:hidden;font-family:'Segoe UI',sans-serif}
+canvas{display:block}
+</style></head><body><canvas id="c"></canvas>
+<script>
+const W=1080,H=1920;
+const c=document.getElementById('c');c.width=W;c.height=H;
+const ctx=c.getContext('2d');
+let t=0;
+const CX=540,CY=960;
+
+// Orbital components
+const orbits=[
+  // Inner ring
+  {dist:200,angle:0,speed:0.3,size:55,label:'NVIDIA',color:'#76b900',icon:'⚡',ring:0},
+  {dist:200,angle:Math.PI*0.67,speed:0.3,size:55,label:'Ollama',color:'#3fb950',icon:'🤖',ring:0},
+  {dist:200,angle:Math.PI*1.33,speed:0.3,size:55,label:'Docker',color:'#2496ed',icon:'🐳',ring:0},
+  // Middle ring
+  {dist:380,angle:0,speed:0.15,size:50,label:'AWS EC2',color:'#ff9900',icon:'☁️',ring:1},
+  {dist:380,angle:Math.PI*0.5,speed:0.15,size:50,label:'S3',color:'#ff9900',icon:'📦',ring:1},
+  {dist:380,angle:Math.PI,speed:0.15,size:50,label:'Windows',color:'#0078d4',icon:'🖥️',ring:1},
+  {dist:380,angle:Math.PI*1.5,speed:0.15,size:50,label:'Bedrock',color:'#ff9900',icon:'🪨',ring:1},
+  // Outer ring
+  {dist:560,angle:0,speed:0.08,size:45,label:'CLI v2',color:'#bb86fc',icon:'⌨️',ring:2},
+  {dist:560,angle:Math.PI*0.4,speed:0.08,size:45,label:'Win Agent',color:'#03dac6',icon:'🕵️',ring:2},
+  {dist:560,angle:Math.PI*0.8,speed:0.08,size:45,label:'Guacamole',color:'#e91e63',icon:'🌐',ring:2},
+  {dist:560,angle:Math.PI*1.2,speed:0.08,size:45,label:'Skills ×47',color:'#cf6679',icon:'🎯',ring:2},
+  {dist:560,angle:Math.PI*1.6,speed:0.08,size:45,label:'MCP',color:'#ffd700',icon:'🔌',ring:2},
+];
+
+// Stars
+const stars=[];
+for(let i=0;i<300;i++){
+  stars.push({x:Math.random()*W,y:Math.random()*H,s:Math.random()*2+0.5,b:Math.random()});
+}
+
+// Nebula colors
+const nebulaColors=['#1a0033','#0d1b3e','#0a2a1a','#2a0a1a'];
+
+function drawStars(time){
+  stars.forEach(s=>{
+    const twinkle=Math.sin(time*3+s.b*10)*0.3+0.7;
+    ctx.beginPath();
+    ctx.arc(s.x,s.y,s.s*twinkle,0,Math.PI*2);
+    ctx.fillStyle=`rgba(255,255,255,${twinkle*0.6})`;
+    ctx.fill();
+  });
+}
+
+function drawNebula(time){
+  nebulaColors.forEach((color,i)=>{
+    const x=CX+Math.sin(time*0.2+i*2)*200;
+    const y=CY+Math.cos(time*0.15+i*1.5)*300;
+    const grad=ctx.createRadialGradient(x,y,0,x,y,400);
+    grad.addColorStop(0,color+'33');
+    grad.addColorStop(1,'transparent');
+    ctx.fillStyle=grad;
+    ctx.fillRect(0,0,W,H);
+  });
+}
+
+function drawOrbitRings(time){
+  [200,380,560].forEach((dist,i)=>{
+    ctx.beginPath();
+    ctx.ellipse(CX,CY,dist,dist*0.35,0,0,Math.PI*2);
+    ctx.strokeStyle=`rgba(100,100,255,${0.08+Math.sin(time+i)*0.04})`;
+    ctx.lineWidth=1;
+    ctx.setLineDash([5,10]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  });
+}
+
+function drawBrain(time){
+  const pulse=Math.sin(time*3)*0.15+1;
+  const r=90*pulse;
+  
+  // Massive glow
+  const grad=ctx.createRadialGradient(CX,CY,0,CX,CY,r*4);
+  grad.addColorStop(0,'rgba(0,150,255,0.3)');
+  grad.addColorStop(0.3,'rgba(0,100,255,0.1)');
+  grad.addColorStop(1,'transparent');
+  ctx.fillStyle=grad;
+  ctx.beginPath();
+  ctx.arc(CX,CY,r*4,0,Math.PI*2);
+  ctx.fill();
+  
+  // Core
+  const coreGrad=ctx.createRadialGradient(CX,CY,0,CX,CY,r);
+  coreGrad.addColorStop(0,'#0088ff');
+  coreGrad.addColorStop(0.5,'#0055cc');
+  coreGrad.addColorStop(1,'#003388');
+  ctx.beginPath();
+  ctx.arc(CX,CY,r,0,Math.PI*2);
+  ctx.fillStyle=coreGrad;
+  ctx.fill();
+  
+  // Rings
+  for(let i=0;i<3;i++){
+    ctx.beginPath();
+    ctx.arc(CX,CY,r+10+i*12,time*2+i,time*2+i+Math.PI);
+    ctx.strokeStyle=`rgba(0,200,255,${0.5-i*0.15})`;
+    ctx.lineWidth=2;
+    ctx.stroke();
+  }
+  
+  // Label
+  ctx.textAlign='center';
+  ctx.textBaseline='middle';
+  ctx.font='bold 32px "Segoe UI"';
+  ctx.fillStyle='#ffffff';
+  ctx.shadowColor='#00aaff';
+  ctx.shadowBlur=20;
+  ctx.fillText('🧠',CX,CY-15);
+  ctx.font='bold 18px "Segoe UI"';
+  ctx.fillText('OPSORA',CX,CY+20);
+  ctx.font='12px monospace';
+  ctx.fillStyle='#88ccff';
+  ctx.shadowBlur=0;
+  ctx.fillText('BRAIN',CX,CY+40);
+}
+
+function drawComponent(comp,time,idx){
+  const angle=comp.angle+time*comp.speed;
+  // Perspective: flatten Y
+  const x=CX+Math.cos(angle)*comp.dist;
+  const yFlat=Math.sin(angle)*comp.dist*0.35;
+  const y=CY+yFlat;
+  
+  // Depth: components behind brain are dimmer
+  const depth=Math.sin(angle);
+  const alpha=0.5+depth*0.5;
+  const sizeScale=0.8+depth*0.2;
+  const r=comp.size*sizeScale;
+  
+  ctx.save();
+  ctx.globalAlpha=alpha;
+  
+  // Glow
+  const grad=ctx.createRadialGradient(x,y,0,x,y,r*2);
+  grad.addColorStop(0,comp.color+'44');
+  grad.addColorStop(1,'transparent');
+  ctx.fillStyle=grad;
+  ctx.beginPath();
+  ctx.arc(x,y,r*2,0,Math.PI*2);
+  ctx.fill();
+  
+  // Circle
+  ctx.beginPath();
+  ctx.arc(x,y,r,0,Math.PI*2);
+  ctx.fillStyle='#0a0a2a';
+  ctx.fill();
+  ctx.strokeStyle=comp.color;
+  ctx.lineWidth=2;
+  ctx.shadowColor=comp.color;
+  ctx.shadowBlur=15;
+  ctx.stroke();
+  ctx.shadowBlur=0;
+  
+  // Connection line to center
+  ctx.beginPath();
+  ctx.moveTo(CX,CY);
+  ctx.lineTo(x,y);
+  ctx.strokeStyle=comp.color+'22';
+  ctx.lineWidth=1;
+  ctx.stroke();
+  
+  // Energy pulse along line
+  const pulsePos=(time*2+idx*0.5)%1;
+  const px=CX+(x-CX)*pulsePos;
+  const py=CY+(y-CY)*pulsePos;
+  ctx.beginPath();
+  ctx.arc(px,py,3,0,Math.PI*2);
+  ctx.fillStyle=comp.color;
+  ctx.fill();
+  
+  // Icon + Label
+  ctx.textAlign='center';
+  ctx.textBaseline='middle';
+  ctx.font='20px sans-serif';
+  ctx.fillStyle='#fff';
+  ctx.fillText(comp.icon,x,y-8);
+  ctx.font='bold 11px monospace';
+  ctx.fillStyle=comp.color;
+  ctx.fillText(comp.label,x,y+16);
+  
+  ctx.restore();
+}
+
+function drawTitle(time){
+  const fadeIn=Math.min(1,time/2);
+  ctx.save();
+  ctx.globalAlpha=fadeIn;
+  ctx.textAlign='center';
+  
+  ctx.font='bold 52px "Segoe UI"';
+  ctx.fillStyle='#ffffff';
+  ctx.shadowColor='#0088ff';
+  ctx.shadowBlur=30;
+  ctx.fillText('OPSORA',W/2,120);
+  ctx.shadowBlur=0;
+  
+  ctx.font='20px "Segoe UI"';
+  ctx.fillStyle='#6688cc';
+  ctx.fillText('COSMIC ORBIT TOPOLOGY',W/2,160);
+  
+  const beat=Math.sin(time*Math.PI*2)*0.5+0.5;
+  ctx.font='14px monospace';
+  ctx.fillStyle=`rgba(100,150,255,${0.3+beat*0.5})`;
+  ctx.fillText('♪ HAPPY NATION — ACE OF BASE ♪',W/2,200);
+  
+  // Stats at bottom
+  ctx.font='13px monospace';
+  ctx.fillStyle='#445588';
+  ctx.fillText('6 Instances • 11 S3 • 8 Docker • 7 Models • 47 Skills • 9 AI Providers',W/2,1830);
+  ctx.fillText('opsora v2.0 — all resources connected — 2026',W/2,1860);
+  
+  ctx.restore();
+}
+
+function drawEnergyWaves(time){
+  for(let i=0;i<5;i++){
+    const waveR=(time*80+i*120)%800;
+    const alpha=Math.max(0,1-waveR/800)*0.15;
+    ctx.beginPath();
+    ctx.ellipse(CX,CY,waveR,waveR*0.35,0,0,Math.PI*2);
+    ctx.strokeStyle=`rgba(0,100,255,${alpha})`;
+    ctx.lineWidth=2;
+    ctx.stroke();
+  }
+}
+
+function animate(){
+  t+=1/60;
+  
+  // Clear
+  ctx.fillStyle='#030012';
+  ctx.fillRect(0,0,W,H);
+  
+  drawStars(t);
+  drawNebula(t);
+  drawEnergyWaves(t);
+  drawOrbitRings(t);
+  
+  // Draw components (back to front by depth)
+  const sorted=[...orbits.map((o,i)=>({...o,idx:i}))];
+  sorted.sort((a,b)=>{
+    const da=Math.sin(a.angle+t*a.speed);
+    const db=Math.sin(b.angle+t*b.speed);
+    return da-db;
+  });
+  
+  // Draw back components first
+  sorted.filter(c=>Math.sin(c.angle+t*c.speed)<0).forEach(c=>drawComponent(c,t,c.idx));
+  
+  drawBrain(t);
+  
+  // Draw front components
+  sorted.filter(c=>Math.sin(c.angle+t*c.speed)>=0).forEach(c=>drawComponent(c,t,c.idx));
+  
+  drawTitle(t);
+  
+  if(t<30)requestAnimationFrame(animate);
+}
+
+animate();
+</script></body></html>

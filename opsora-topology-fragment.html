@@ -1,0 +1,259 @@
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0e1a;font-family:'Segoe UI',system-ui,sans-serif;display:flex;justify-content:center;align-items:flex-start;min-height:100vh;padding:10px}
+.topology{width:1080px;height:2400px;position:relative;overflow:hidden}
+.bg-grid{position:absolute;inset:0;background-image:radial-gradient(circle,#1a2340 1px,transparent 1px);background-size:40px 40px;opacity:.3}
+.header{text-align:center;padding:40px 30px 20px;position:relative;z-index:2}
+.header h1{font-size:52px;color:#58a6ff;font-weight:800;letter-spacing:-1px;text-shadow:0 0 40px rgba(88,166,255,.3)}
+.header p{font-size:22px;color:#8b949e;margin-top:8px}
+.header .version{display:inline-block;background:#1a2340;color:#58a6ff;padding:6px 18px;border-radius:20px;font-size:18px;border:1px solid #30363d;margin-top:12px}
+.legend{display:flex;justify-content:center;gap:24px;padding:10px 30px;position:relative;z-index:2}
+.legend-item{display:flex;align-items:center;gap:8px;font-size:16px;color:#8b949e}
+.legend-dot{width:14px;height:14px;border-radius:50%}
+.dot-green{background:#3fb950;box-shadow:0 0 8px #3fb950}
+.dot-red{background:#f85149;box-shadow:0 0 8px #f85149}
+.dot-yellow{background:#d29922;box-shadow:0 0 8px #d29922}
+.dot-blue{background:#58a6ff;box-shadow:0 0 8px #58a6ff}
+svg{position:absolute;inset:0;z-index:1;pointer-events:none}
+.node{position:absolute;z-index:3;border-radius:16px;padding:20px;backdrop-filter:blur(10px)}
+.node-title{font-size:22px;font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:10px}
+.node-subtitle{font-size:14px;color:#8b949e;margin-bottom:12px}
+.node-detail{font-size:13px;color:#c9d1d9;line-height:1.6}
+.node-detail b{color:#58a6ff}
+.node-badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;margin-right:4px;margin-bottom:4px}
+.badge-green{background:rgba(63,185,80,.15);color:#3fb950;border:1px solid rgba(63,185,80,.3)}
+.badge-red{background:rgba(248,81,73,.15);color:#f85149;border:1px solid rgba(248,81,73,.3)}
+.badge-blue{background:rgba(88,166,255,.15);color:#58a6ff;border:1px solid rgba(88,166,255,.3)}
+.badge-yellow{background:rgba(210,153,34,.15);color:#d29922;border:1px solid rgba(210,153,34,.3)}
+.badge-purple{background:rgba(188,140,255,.15);color:#bc8cff;border:1px solid rgba(188,140,255,.3)}
+
+.brain{left:80px;top:180px;width:920px;height:560px;background:linear-gradient(135deg,rgba(13,25,50,.9),rgba(20,30,60,.8));border:2px solid #1f6feb;box-shadow:0 0 60px rgba(31,111,235,.2)}
+.brain .node-title{font-size:32px;color:#58a6ff}
+
+.docker-section{left:80px;top:780px;width:920px;height:340px;background:linear-gradient(135deg,rgba(10,20,40,.9),rgba(15,25,50,.8));border:2px solid #30363d;box-shadow:0 0 40px rgba(48,54,61,.3)}
+
+.ai-section{left:80px;top:1160px;width:920px;height:320px;background:linear-gradient(135deg,rgba(10,30,20,.9),rgba(15,40,25,.8));border:2px solid #238636;box-shadow:0 0 40px rgba(35,134,54,.2)}
+
+.aws-section{left:80px;top:1520px;width:440px;height:380px;background:linear-gradient(135deg,rgba(30,15,10,.9),rgba(40,20,15,.8));border:2px solid #d29922;box-shadow:0 0 40px rgba(210,153,34,.15)}
+
+.windows-section{right:80px;top:1520px;width:440px;height:380px;background:linear-gradient(135deg,rgba(10,15,35,.9),rgba(15,20,45,.8));border:2px solid #58a6ff;box-shadow:0 0 40px rgba(88,166,255,.15)}
+
+.stopped-section{left:80px;top:1940px;width:920px;height:200px;background:linear-gradient(135deg,rgba(30,10,10,.9),rgba(40,15,15,.8));border:2px solid #f8514966;box-shadow:0 0 40px rgba(248,81,73,.1)}
+
+.tools-section{left:80px;top:2180px;width:920px;height:180px;background:linear-gradient(135deg,rgba(25,15,40,.9),rgba(35,20,50,.8));border:2px solid #bc8cff;box-shadow:0 0 40px rgba(188,140,255,.15)}
+
+.docker-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:10px}
+.docker-item{background:rgba(255,255,255,.04);border:1px solid #30363d;border-radius:10px;padding:12px;text-align:center}
+.docker-item .name{font-size:14px;font-weight:600;color:#c9d1d9}
+.docker-item .port{font-size:12px;color:#58a6ff;margin-top:4px}
+.docker-item .status{font-size:11px;color:#3fb950;margin-top:2px}
+
+.conn-label{position:absolute;z-index:4;background:#0a0e1a;color:#8b949e;font-size:13px;padding:4px 12px;border-radius:10px;border:1px solid #30363d;white-space:nowrap}
+</style>
+
+<div class="topology">
+<div class="bg-grid"></div>
+
+<!-- SVG Connection Lines -->
+<svg width="1080" height="2400" viewBox="0 0 1080 2400">
+  <!-- Brain to Docker -->
+  <line x1="540" y1="740" x2="540" y2="780" stroke="#30363d" stroke-width="2" stroke-dasharray="8,4"/>
+  <!-- Brain to AI -->
+  <line x1="540" y1="740" x2="540" y2="1160" stroke="#238636" stroke-width="2" stroke-dasharray="8,4"/>
+  <!-- Brain to AWS -->
+  <line x1="280" y1="740" x2="280" y2="1520" stroke="#d29922" stroke-width="2" stroke-dasharray="8,4"/>
+  <!-- Brain to Windows -->
+  <line x1="800" y1="740" x2="800" y2="1520" stroke="#58a6ff" stroke-width="2" stroke-dasharray="8,4"/>
+  <!-- AWS to Stopped -->
+  <line x1="280" y1="1900" x2="280" y2="1940" stroke="#f8514966" stroke-width="2" stroke-dasharray="8,4"/>
+  <!-- Windows to Stopped -->
+  <line x1="800" y1="1900" x2="800" y2="1940" stroke="#f8514966" stroke-width="2" stroke-dasharray="8,4"/>
+  <!-- Brain to Tools -->
+  <line x1="540" y1="740" x2="540" y2="2180" stroke="#bc8cff" stroke-width="2" stroke-dasharray="8,4"/>
+</svg>
+
+<!-- Connection Labels -->
+<div class="conn-label" style="left:430px;top:760px">Docker</div>
+<div class="conn-label" style="left:150px;top:1120px">SSM / AWS CLI</div>
+<div class="conn-label" style="left:700px;top:1120px">SSM / RDP</div>
+<div class="conn-label" style="left:430px;top:1500px">Local</div>
+
+<!-- Header -->
+<div class="header">
+  <h1>⚡ OPSORA TOPOLOGY</h1>
+  <p>System Architecture — All Resources Connected</p>
+  <div class="version">v2.0 Codex/Cursor Edition • 2026-07-20</div>
+</div>
+
+<!-- Legend -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot dot-green"></div>Running</div>
+  <div class="legend-item"><div class="legend-dot dot-red"></div>Stopped</div>
+  <div class="legend-item"><div class="legend-dot dot-yellow"></div>Expired</div>
+  <div class="legend-item"><div class="legend-dot dot-blue"></div>Connected</div>
+</div>
+
+<!-- OPSORA BRAIN -->
+<div class="node brain">
+  <div class="node-title">🧠 OPSORA-BRAIN <span class="node-badge badge-green">● RUNNING</span></div>
+  <div class="node-subtitle">us-east-1 • r5.2xlarge • 98.94.100.100 • Linux</div>
+  <div class="node-detail" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <div>
+      <b>CLI v2 (Codex-style)</b><br>
+      8 tools • Auto-routing • YOLO mode<br><br>
+      <b>Instance Command Center</b><br>
+      6 EC2 instances unified<br>
+      Data access via SSM<br><br>
+      <b>Windows Agent (OpenClaw)</b><br>
+      Autonomous browser control<br>
+      SSM → PowerShell → Playwright
+    </div>
+    <div>
+      <b>System Services</b><br>
+      opsora-proxy :8080<br>
+      Docker runtime<br>
+      NTP (chrony) • cron<br><br>
+      <b>Credentials</b><br>
+      <span class="node-badge badge-green">NVIDIA ✓</span>
+      <span class="node-badge badge-green">Ollama ✓</span>
+      <span class="node-badge badge-green">AWS 3 profiles ✓</span>
+      <span class="node-badge badge-yellow">Alibaba ✗</span>
+      <span class="node-badge badge-yellow">OpenAI ✗</span>
+      <span class="node-badge badge-blue">5 untested</span><br><br>
+      <b>Storage</b>: ~5.6GB workspace
+    </div>
+  </div>
+</div>
+
+<!-- DOCKER -->
+<div class="node docker-section">
+  <div class="node-title">🐳 DOCKER CONTAINERS <span class="node-badge badge-green">8 running</span></div>
+  <div class="node-subtitle">Docker Engine • 6 active ports</div>
+  <div class="docker-grid">
+    <div class="docker-item"><div class="name">Guacamole</div><div class="port">:8888</div><div class="status">RDP Web ✓</div></div>
+    <div class="docker-item"><div class="name">Open WebUI</div><div class="port">:3000</div><div class="status">AI Chat ✓</div></div>
+    <div class="docker-item"><div class="name">N8N</div><div class="port">:5678</div><div class="status">Workflows ✓</div></div>
+    <div class="docker-item"><div class="name">Dashboard</div><div class="port">:8000</div><div class="status">Constituency ✓</div></div>
+    <div class="docker-item"><div class="name">Qdrant</div><div class="port">:6333</div><div class="status">Vector DB ✓</div></div>
+    <div class="docker-item"><div class="name">Ollama</div><div class="port">:11434</div><div class="status">Local AI ✓</div></div>
+    <div class="docker-item"><div class="name">PostgreSQL</div><div class="port">:5432</div><div class="status">Database ✓</div></div>
+    <div class="docker-item"><div class="name">guacd</div><div class="port">:4822</div><div class="status">RDP daemon ✓</div></div>
+  </div>
+</div>
+
+<!-- AI PROVIDERS -->
+<div class="node ai-section">
+  <div class="node-title">🤖 AI PROVIDERS</div>
+  <div class="node-subtitle">Local + Cloud inference</div>
+  <div class="node-detail" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <div>
+      <b>Ollama Local (7 models)</b><br>
+      <span class="node-badge badge-green">qwen2.5-coder:32b</span>
+      <span class="node-badge badge-green">llama3.1</span>
+      <span class="node-badge badge-green">llama3</span>
+      <span class="node-badge badge-green">qwen3.5:4b</span>
+      <span class="node-badge badge-green">phi3</span>
+      <span class="node-badge badge-green">nomic-embed</span>
+      <br><b>Total</b>: 37GB models
+    </div>
+    <div>
+      <b>NVIDIA API ✓</b><br>
+      llama-3.1-70b-instruct<br><br>
+      <span class="node-badge badge-red">Alibaba ✗ 6 keys expired</span><br>
+      <span class="node-badge badge-red">OpenAI ✗ wrong key</span><br>
+      <span class="node-badge badge-yellow">DeepSeek ⏳</span>
+      <span class="node-badge badge-yellow">Groq ⏳</span>
+      <span class="node-badge badge-yellow">OpenRouter ⏳</span>
+      <span class="node-badge badge-yellow">ZhipuAI ⏳</span>
+      <span class="node-badge badge-yellow">MiniMax ⏳</span>
+    </div>
+  </div>
+</div>
+
+<!-- AWS EC2 -->
+<div class="node aws-section">
+  <div class="node-title">☁️ AWS</div>
+  <div class="node-subtitle">Account: 134748917746</div>
+  <div class="node-detail">
+    <span class="node-badge badge-green">default ✓</span>
+    <span class="node-badge badge-green">cladius ✓</span>
+    <span class="node-badge badge-green">kimchi ✓</span><br>
+    <span class="node-badge badge-red">root1 ✗</span>
+    <span class="node-badge badge-red">root2 ✗</span>
+    <span class="node-badge badge-red">opsora_2 ✗</span><br><br>
+    <b>S3 Buckets</b>: 11 total<br>
+    <span class="node-badge badge-blue">opsora-production-artifacts</span>
+    <span class="node-badge badge-blue">opsora-knowledge-base</span>
+    <span class="node-badge badge-blue">opsora-agent-screenshots</span>
+    <span class="node-badge badge-blue">opsora-backups</span>
+    <span class="node-badge badge-blue">sagemaker</span>
+    <span class="node-badge badge-blue">+6 more</span>
+  </div>
+</div>
+
+<!-- WINDOWS INSTANCE -->
+<div class="node windows-section">
+  <div class="node-title">🖥️ WINDOWS</div>
+  <div class="node-subtitle">rdp-windows-prod • us-west-2</div>
+  <div class="node-detail">
+    <span class="node-badge badge-green">● RUNNING</span>
+    <span class="node-badge badge-green">SSM Online</span><br>
+    m5zn.2xlarge • 35.166.137.207<br><br>
+    <span class="node-badge badge-blue">Playwright ✓</span>
+    <span class="node-badge badge-blue">Node.js v24 ✓</span>
+    <span class="node-badge badge-blue">Chrome ✓</span>
+    <span class="node-badge badge-blue">AWS CLI v2 ✓</span>
+    <span class="node-badge badge-blue">Docker ✓</span>
+    <span class="node-badge badge-blue">Python 3.14 ✓</span>
+    <span class="node-badge badge-blue">Terraform ✓</span>
+    <span class="node-badge badge-blue">Datadog ✓</span><br><br>
+    <b>Access</b>: Guacamole RDP :8888
+  </div>
+</div>
+
+<!-- STOPPED INSTANCES -->
+<div class="node stopped-section">
+  <div class="node-title">🔴 STOPPED INSTANCES (4) <span style="font-size:14px;color:#8b949e">us-east-1</span></div>
+  <div class="node-detail" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+    <div><span class="node-badge badge-red">pw-agent-vps</span> m7i-flex.large • 54.81.31.132</div>
+    <div><span class="node-badge badge-red">cloudpc-ec2-win</span> m5.xlarge • 34.224.16.68</div>
+    <div><span class="node-badge badge-red">opsora-model-vps</span> m7i-flex.large</div>
+    <div><span class="node-badge badge-red">my-termux-vm</span> t3.micro</div>
+  </div>
+</div>
+
+<!-- TOOLS & SKILLS -->
+<div class="node tools-section">
+  <div class="node-title">🛠️ TOOLS & SKILLS</div>
+  <div class="node-detail" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:8px">
+    <div>
+      <b>AI Coding</b><br>
+      <span class="node-badge badge-green">Qwen Code</span>
+      <span class="node-badge badge-green">Kimchi 0.1.72</span>
+      <span class="node-badge badge-green">Codex CLI</span>
+      <span class="node-badge badge-green">Gemini CLI</span>
+      <span class="node-badge badge-green">OpenCode</span>
+      <span class="node-badge badge-green">Aider</span>
+    </div>
+    <div>
+      <b>Skills (47)</b><br>
+      <span class="node-badge badge-purple">figma ×7</span>
+      <span class="node-badge badge-purple">deploy ×5</span>
+      <span class="node-badge badge-purple">security ×3</span>
+      <span class="node-badge badge-purple">notion ×4</span>
+      <span class="node-badge badge-purple">playwright ×2</span>
+      <span class="node-badge badge-purple">gh ×2</span>
+    </div>
+    <div>
+      <b>Infrastructure</b><br>
+      <span class="node-badge badge-blue">GitHub CLI 2.96</span>
+      <span class="node-badge badge-blue">Terraform 1.15</span>
+      <span class="node-badge badge-blue">AWS CLI v2</span>
+      <span class="node-badge badge-blue">Aliyun CLI</span>
+      <span class="node-badge badge-blue">NGC CLI</span>
+      <span class="node-badge badge-blue">Graphify MCP</span>
+    </div>
+  </div>
+</div>
+
+</div>

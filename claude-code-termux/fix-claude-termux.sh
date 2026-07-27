@@ -25,7 +25,16 @@ resolve_claude_cli() {
   return 1
 }
 
-CLAUDE_CLI="$(resolve_claude_cli)" || { echo "❌ Claude Code tidak ditemukan"; exit 1; }
+CLAUDE_CLI="$(resolve_claude_cli)" || {
+  echo "📦 Claude Code tidak ditemukan — install @2.1.112..."
+  export NPM_CONFIG_PREFIX="${NPM_CONFIG_PREFIX:-$HOME/.npm-global}"
+  export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+  npm install -g @anthropic-ai/claude-code@2.1.112 || {
+    echo "❌ npm install gagal"
+    exit 1
+  }
+  CLAUDE_CLI="$(resolve_claude_cli)" || { echo "❌ cli.js tidak ditemukan"; exit 1; }
+}
 
 if head -1 "$CLAUDE_CLI" | grep -q '/usr/bin/env node'; then
   sed -i '1s|#!/usr/bin/env node|#!'"$PREFIX"'/bin/node|' "$CLAUDE_CLI"
@@ -43,5 +52,6 @@ fi
 chmod +x "$BIN_DIR/opsora-claude"
 
 bash "$INSTALL_DIR/stop-gateway.sh" 2>/dev/null || true
+bash "$INSTALL_DIR/start-gateway.sh" restart 2>/dev/null || true
 
-echo "✅ Fix selesai. Jalankan: opsora-gateway restart && opsora-claude"
+echo "✅ Fix selesai. Jalankan: opsora-claude"

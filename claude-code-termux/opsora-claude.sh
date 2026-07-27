@@ -27,11 +27,22 @@ resolve_claude_cli() {
 }
 
 NODE="${TERMUX_NODE:-$PREFIX/bin/node}"
-CLAUDE_CLI="$(resolve_claude_cli)" || {
-  echo "❌ Claude Code tidak ditemukan. Jalankan:"
-  echo "   npm install -g @anthropic-ai/claude-code@2.1.112"
-  exit 1
-}
+CLAUDE_VERSION="${CLAUDE_CODE_VERSION:-2.1.112}"
+
+if ! CLAUDE_CLI="$(resolve_claude_cli)"; then
+  echo "📦 Claude Code tidak ditemukan — install @${CLAUDE_VERSION}..."
+  export NPM_CONFIG_PREFIX="${NPM_CONFIG_PREFIX:-$HOME/.npm-global}"
+  export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+  npm install -g "@anthropic-ai/claude-code@${CLAUDE_VERSION}" || {
+    echo "❌ npm install gagal. Coba manual:"
+    echo "   npm install -g @anthropic-ai/claude-code@${CLAUDE_VERSION}"
+    exit 1
+  }
+  CLAUDE_CLI="$(resolve_claude_cli)" || {
+    echo "❌ cli.js masih tidak ditemukan setelah npm install"
+    exit 1
+  }
+fi
 
 if head -1 "$CLAUDE_CLI" | grep -q '/usr/bin/env node'; then
   sed -i '1s|#!/usr/bin/env node|#!'"$PREFIX"'/bin/node|' "$CLAUDE_CLI"

@@ -1,0 +1,213 @@
+{
+  "generated_at": "2026-07-27T22:26:57.028484Z",
+  "integrate_count": 102,
+  "nvcf_active_count": 148,
+  "recommended_profiles": {
+    "balanced": {
+      "backend": "integrate",
+      "model": "meta/llama-3.1-70b-instruct"
+    },
+    "fast": {
+      "backend": "integrate",
+      "model": "meta/llama-3.1-8b-instruct"
+    },
+    "coder": {
+      "backend": "integrate",
+      "model": "deepseek-ai/deepseek-v4-pro"
+    },
+    "flagship": {
+      "backend": "integrate",
+      "model": "nvidia/nemotron-3-super-120b-a12b"
+    },
+    "nvcf_gemma": {
+      "backend": "nvcf",
+      "model": "ai-gemma-2-2b-it"
+    },
+    "nvcf_llama8": {
+      "backend": "nvcf",
+      "model": "ai-llama-3_1-8b-instruct"
+    }
+  },
+  "nvcf_coding_functions": [
+    {
+      "name": "ai-gemma-2-2b-it",
+      "id": "b24f0b9b-17f0-4fbf-bbd6-1d01394652cf",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-llama-3_1-8b-instruct",
+      "id": "e62a4350-2218-4cf5-9262-112432d239f8",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-nemotron-ocr-v2",
+      "id": "ec5017ef-c6f1-4ada-9841-4d6d00306dbc",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-llama-guard-4-12b",
+      "id": "c8bf7301-6433-4043-a427-57633c6ac335",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-qwen3-next-80b-a3b-instruct",
+      "id": "e467a0f2-c74f-4c21-8bf8-b977d7895f93",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-cosmos-nemotron-34b",
+      "id": "96ebdb7f-4a69-49d6-9151-531b52e507e0",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-llama-3_2-11b-vision-instruct",
+      "id": "9fa6fd04-ba2c-4bb3-90b7-ede407a9290f",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-diffusiongemma-26b-a4b-it",
+      "id": "ffd13b18-1c55-4a7a-b71a-acbfde9ce8a0",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-llama-nemotron-embed-vl-1b-v2",
+      "id": "6a6d2683-60ba-477c-918d-66e9eeb900cd",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-nemotron-ocr-v1",
+      "id": "ce0b1e30-1471-4fd4-9dde-c6a28ef6c68a",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-llama-nemotron-embed-1b-v2",
+      "id": "54dfaa3b-f292-4c76-9a48-b49ecab09094",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-llama-3_3-nemotron-super-49b-v1_5",
+      "id": "50b12b3b-a571-46a3-968c-c13662f6402e",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-nemotron-parse",
+      "id": "6dac0f3d-28ce-4c0c-bc26-b1cb9d22d9c7",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-llama-3_1-nemoguard-8b-content-safety",
+      "id": "3aa9f663-5c61-43c5-9ca6-fcddf6ce1511",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-nemotron-3_5-content-safety",
+      "id": "3e84ff75-527b-4491-8647-530406876074",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-llama-3_1-nemotron-safety-guard-8b-v3",
+      "id": "ec6a02a5-d259-44c8-8425-e72bfefcf2f9",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-dracarys-llama-3_1-70b-instruct",
+      "id": "d27bf72f-ff2f-4443-95b4-5f06f85f72e5",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-google-paligemma",
+      "id": "a70e7356-c643-41b3-9a7e-b89ea1e7dea1",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-nemotron-3-nano-30b-a3b",
+      "id": "2b2dcd47-c858-425a-9c04-4cacf2eac993",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-llama-3_1-nemotron-nano-vl-8b-v1",
+      "id": "5756401f-7f6e-4a22-bb63-2afc1e1ced06",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-nemotron-3-embed-1b",
+      "id": "df727967-5a01-445f-ba36-fdfb1974c359",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-llama-3_1-nemoguard-8b-topic-control",
+      "id": "fb87651c-f7e4-430f-8f2e-dffcb6de1d4c",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-mistralai-mistral-nemotron",
+      "id": "f81394d8-63c0-4023-afa2-7ad11aa54ca3",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-nemotron-graphic-elements-v1",
+      "id": "2e00146e-f208-4034-937c-e3a9d4190490",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-llama-4-maverick-17b-128e-instruct",
+      "id": "2f092df4-a732-4e88-b3a9-337829a9cde7",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-nemotron-3-nano-omni-30b-a3b-reasoning",
+      "id": "c4ed50ff-b5c3-409d-ab57-b79c33f5bb39",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-nemotron-asr-streaming",
+      "id": "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-llama-3_2-3b-instruct",
+      "id": "4f1c926f-42aa-4b52-9ac9-c2a2098e432f",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "blueprint-llama-3_2-nv-embedqa-1b-v2",
+      "id": "9a0036bd-9486-4d12-a8a4-14699058e829",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    },
+    {
+      "name": "ai-nemotron-table-structure-v1",
+      "id": "e8cad756-9f99-4cad-a1a4-1afb5e340be3",
+      "status": "ACTIVE",
+      "api_base": "https://api.nvcf.nvidia.com/v2/nvcf"
+    }
+  ]
+}

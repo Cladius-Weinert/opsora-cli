@@ -14,13 +14,22 @@ BIN_DIR="$HOME/.local/bin"
 NPM_PREFIX="${NPM_CONFIG_PREFIX:-$HOME/.npm-global}"
 NODE="${TERMUX_NODE:-$PREFIX/bin/node}"
 CLAUDE_VERSION="${CLAUDE_CODE_VERSION:-2.1.112}"
+NODE_MARKER="${INSTALL_DIR}/.node-version"
 
 echo -e "${BOLD}${CYAN}Opsora Claude Code — Termux installer${NC}"
 
 # ── Packages ────────────────────────────────────────────────────
 info "Installing Termux packages..."
 pkg update -y >/dev/null
-pkg install -y python git curl jq nodejs-lts 2>/dev/null || pkg install -y python git curl jq nodejs
+
+BASE_PKGS="python git curl jq"
+if command -v node >/dev/null 2>&1; then
+  ok "Node sudah terpasang ($(node -v)) — skip nodejs-lts"
+  pkg install -y $BASE_PKGS
+else
+  info "Node belum ada — install nodejs-lts..."
+  pkg install -y $BASE_PKGS nodejs-lts 2>/dev/null || pkg install -y $BASE_PKGS nodejs
+fi
 
 mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$NPM_PREFIX/bin" "$HOME/.claude"
 
@@ -69,8 +78,21 @@ resolve_claude_cli() {
   return 1
 }
 
+CURRENT_NODE_VER="$(node -v 2>/dev/null || echo "none")"
+PREV_NODE_VER="$(cat "$NODE_MARKER" 2>/dev/null || echo "")"
+FORCE_NPM_REINSTALL=false
+if [[ -n "$PREV_NODE_VER" && "$PREV_NODE_VER" != "$CURRENT_NODE_VER" ]]; then
+  FORCE_NPM_REINSTALL=true
+  warn "Node berubah ($PREV_NODE_VER → $CURRENT_NODE_VER) — reinstall Claude Code"
+fi
+echo "$CURRENT_NODE_VER" >"$NODE_MARKER"
+
 info "Installing Claude Code @${CLAUDE_VERSION}..."
-npm install -g "@anthropic-ai/claude-code@${CLAUDE_VERSION}" 2>/dev/null || true
+if $FORCE_NPM_REINSTALL; then
+  npm install -g "@anthropic-ai/claude-code@${CLAUDE_VERSION}"
+else
+  npm install -g "@anthropic-ai/claude-code@${CLAUDE_VERSION}" 2>/dev/null || true
+fi
 CLAUDE_CLI="$(resolve_claude_cli)" || {
   echo "❌ Claude Code gagal install. Coba: npm install -g @anthropic-ai/claude-code@${CLAUDE_VERSION}"
   exit 1
@@ -85,6 +107,9 @@ fi
 # ── Apply gateway settings (force overwrite) ────────────────────
 bash "$INSTALL_DIR/apply-settings.sh"
 
+# ── Restart proxy after update ──────────────────────────────────
+bash "$INSTALL_DIR/stop-gateway.sh" 2>/dev/null || true
+
 # ── Shell wrappers ──────────────────────────────────────────────
 cat >"$BIN_DIR/opsora-gateway" <<'WRAP'
 #!/data/data/com.termux/files/usr/bin/bash
@@ -96,27 +121,7 @@ cat >"$BIN_DIR/opsora-model" <<'WRAP'
 exec "$HOME/.opsora/claude-code/switch-model.sh" "$@"
 WRAP
 
-cat >"$BIN_DIR/opsora-claude" <<WRAP
-#!/data/data/com.termux/files/usr/bin/bash
-INSTALL_DIR="\${OPSORA_CLAUDE_DIR:-\$HOME/.opsora/claude-code}"
-[[ -f "\$INSTALL_DIR/secrets.env" ]] && source "\$INSTALL_DIR/secrets.env"
-
-# Force NVIDIA gateway — override claude.ai OAuth
-export ANTHROPIC_BASE_URL="http://127.0.0.1:4000"
-export ANTHROPIC_AUTH_TOKEN="\${LITELLM_MASTER_KEY:-sk-opsora-local}"
-unset ANTHROPIC_API_KEY
-export ANTHROPIC_MODEL="\${OPSORA_DEFAULT_MODEL:-opsora-balanced}"
-export ANTHROPIC_SMALL_FAST_MODEL="\${OPSORA_FAST_MODEL:-opsora-fast}"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="opsora-balanced"
-export ANTHROPIC_DEFAULT_OPUS_MODEL="opsora-power"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="opsora-fast"
-export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY="1"
-export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS="1"
-
-"\$INSTALL_DIR/start-gateway.sh" 2>/dev/null || true
-exec "${NODE}" "${CLAUDE_CLI}" "\$@"
-WRAP
-
+cp -f "$SRC/opsora-claude.sh" "$BIN_DIR/opsora-claude"
 chmod +x "$BIN_DIR/opsora-gateway" "$BIN_DIR/opsora-model" "$BIN_DIR/opsora-claude"
 
 grep -q '.local/bin' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >>"$HOME/.bashrc"
@@ -126,12 +131,12 @@ export PATH="$HOME/.local/bin:$PATH"
 echo ""
 info "Verifying gateway..."
 if [[ -f "$INSTALL_DIR/secrets.env" ]] && grep -q 'nvapi-' "$INSTALL_DIR/secrets.env"; then
-  bash "$INSTALL_DIR/start-gateway.sh"
-  sleep 2
-  if bash "$INSTALL_DIR/test-gateway.sh" opsora-fast 2>/dev/null | grep -q '"text"'; then
-    ok "Gateway + NVIDIA model OK"
+  if bash "$INSTALL_DIR/test-gateway.sh" opsora-balanced 2>&1 | tee /tmp/opsora-gateway-test.log | grep -q '"text"\|event:'; then
+    ok "Gateway + NVIDIA model OK (opsora-balanced)"
   else
-    warn "Gateway test gagal — cek: tail ~/.opsora/claude-code/gateway.log"
+    warn "Gateway test gagal:"
+    tail -15 /tmp/opsora-gateway-test.log 2>/dev/null || true
+    warn "Cek log: tail -20 $INSTALL_DIR/gateway.log"
   fi
 else
   warn "NVIDIA_API_KEY belum diisi di $INSTALL_DIR/secrets.env"

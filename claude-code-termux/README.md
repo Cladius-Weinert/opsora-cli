@@ -58,7 +58,7 @@ bash ~/opsora-cli/claude-code-termux/install-termux.sh
 | `opsora-gateway` | Start NVIDIA proxy (port 4000) |
 | `opsora-gateway` stop via `stop-gateway.sh` | Stop proxy |
 | `opsora-model power` | Ganti model utama |
-| `opsora-claude` | Start gateway + jalankan Claude Code |
+| `opsora-claude` | Start gateway + jalankan Claude Code (resolves cli.js at runtime) |
 
 ## Ganti model di sesi Claude Code
 
@@ -97,6 +97,27 @@ Termux HP
 | `~/.opsora/claude-code/models.json` | Katalog profile |
 
 ## Troubleshooting
+
+### Gateway test gagal / "Proxy sudah jalan" setelah install
+
+Proxy lama tidak di-restart setelah update `nvidia-proxy.py`. Perbaikan:
+
+```bash
+cd ~/opsora-cli && git pull
+bash ~/opsora-cli/claude-code-termux/fix-claude-termux.sh
+bash ~/.opsora/claude-code/stop-gateway.sh
+bash ~/.opsora/claude-code/start-gateway.sh restart
+bash ~/.opsora/claude-code/test-gateway.sh opsora-balanced
+```
+
+### `Cannot find module cli.js` setelah `/logout`
+
+Wrapper lama membekukan path `cli.js` saat install. Update wrapper:
+
+```bash
+bash ~/opsora-cli/claude-code-termux/fix-claude-termux.sh
+opsora-claude
+```
 
 ### `bad interpreter: /usr/bin/env` atau `No such file or directory`
 

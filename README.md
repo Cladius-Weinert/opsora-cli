@@ -70,6 +70,19 @@ docker run -it --rm \
   ghcr.io/opsora/opsora-cli:latest
 ```
 
+### Claude Code + NVIDIA (Termux / Android)
+
+Use Claude Code on your phone with NVIDIA full-power models via LiteLLM gateway:
+
+```bash
+git clone https://github.com/Cladius-Weinert/opsora-cli.git ~/opsora-cli
+bash ~/opsora-cli/claude-code-termux/install-termux.sh
+nano ~/.opsora/claude-code/secrets.env   # NVIDIA_API_KEY=nvapi-...
+opsora-gateway && opsora-model power && opsora-claude
+```
+
+See [`claude-code-termux/README.md`](claude-code-termux/README.md) for model profiles (`power`, `coder`, `reasoning`, `nemotron`, etc.).
+
 ### From Source
 
 ```bash

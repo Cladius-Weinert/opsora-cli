@@ -1,14 +1,9 @@
 # Opsora Claude Code — LiteLLM gateway
-# Translates Anthropic Messages API → NVIDIA / Alibaba / OpenAI-compatible providers
-# Docs: https://docs.litellm.ai/docs/providers/nvidia_nim
+# Verified against NVIDIA Integrate API 2026-07-27
+# Catalog: opsora-cli/claude-code-termux/nvidia-cloud-catalog.json
 
 model_list:
-  # ── NVIDIA Integrate — full power tier ─────────────────────────────
-  - model_name: opsora-power
-    litellm_params:
-      model: nvidia_nim/meta/llama-3.3-70b-instruct
-      api_key: os.environ/NVIDIA_API_KEY
-
+  # ── VERIFIED (Integrate API) ──────────────────────────────────────
   - model_name: opsora-balanced
     litellm_params:
       model: nvidia_nim/meta/llama-3.1-70b-instruct
@@ -16,38 +11,51 @@ model_list:
 
   - model_name: opsora-fast
     litellm_params:
-      model: nvidia_nim/mistralai/ministral-14b-instruct-2512
+      model: nvidia_nim/meta/llama-3.1-8b-instruct
       api_key: os.environ/NVIDIA_API_KEY
+
+  - model_name: opsora-power
+    litellm_params:
+      model: nvidia_nim/meta/llama-3.3-70b-instruct
+      api_key: os.environ/NVIDIA_API_KEY
+      timeout: 120
 
   - model_name: opsora-coder
     litellm_params:
-      model: nvidia_nim/deepseek-ai/deepseek-v4-flash
+      model: nvidia_nim/meta/llama-3.1-70b-instruct
       api_key: os.environ/NVIDIA_API_KEY
 
-  - model_name: opsora-reasoning
+  - model_name: opsora-mixtral
     litellm_params:
-      model: nvidia_nim/deepseek-ai/deepseek-r1
+      model: nvidia_nim/mistralai/mixtral-8x22b-v0.1
       api_key: os.environ/NVIDIA_API_KEY
 
   - model_name: opsora-nemotron
     litellm_params:
-      model: nvidia_nim/nvidia/nemotron-4-340b-instruct
+      model: nvidia_nim/nvidia/llama-3.1-nemotron-ultra-253b-v1
+      api_key: os.environ/NVIDIA_API_KEY
+      timeout: 180
+
+  # ── NVCF Cloud Functions (NVIDIA Console) ─────────────────────────
+  - model_name: opsora-nvcf-gemma
+    litellm_params:
+      model: nvidia_nim/ai-gemma-2-2b-it
+      api_base: https://api.nvcf.nvidia.com/v2/nvcf
       api_key: os.environ/NVIDIA_API_KEY
 
-  # ── Alibaba DashScope (optional — set DASHSCOPE_API_KEY) ───────────
+  - model_name: opsora-nvcf-llama70
+    litellm_params:
+      model: nvidia_nim/ai-llama-3_1-70b-instruct
+      api_base: https://api.nvcf.nvidia.com/v2/nvcf
+      api_key: os.environ/NVIDIA_API_KEY
+
+  # ── Optional providers ────────────────────────────────────────────
   - model_name: opsora-qwen-plus
     litellm_params:
       model: openai/qwen-plus
       api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
       api_key: os.environ/DASHSCOPE_API_KEY
 
-  - model_name: opsora-qwen-max
-    litellm_params:
-      model: openai/qwen-max
-      api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
-      api_key: os.environ/DASHSCOPE_API_KEY
-
-  # ── Local Ollama (optional — Termux: ollama serve) ─────────────────
   - model_name: opsora-local
     litellm_params:
       model: ollama/qwen2.5-coder:7b
@@ -56,6 +64,7 @@ model_list:
 litellm_settings:
   drop_params: true
   set_verbose: false
+  request_timeout: 120
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY

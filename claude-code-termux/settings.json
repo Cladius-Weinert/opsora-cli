@@ -1,4 +1,5 @@
 {
+  "model": "opsora-balanced",
   "env": {
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
     "ANTHROPIC_AUTH_TOKEN": "sk-opsora-local",
@@ -8,18 +9,16 @@
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "opsora-balanced",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "opsora-power",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "opsora-fast",
-    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1"
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+    "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
   },
   "availableModels": [
     "opsora-balanced",
     "opsora-fast",
     "opsora-power",
     "opsora-coder",
-    "opsora-mixtral",
-    "opsora-nemotron",
-    "opsora-nvcf-gemma",
-    "opsora-nvcf-llama70",
-    "opsora-qwen-plus",
-    "opsora-local"
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+    "claude-opus-4-20250514"
   ]
 }

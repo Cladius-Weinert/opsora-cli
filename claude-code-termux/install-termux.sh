@@ -16,7 +16,7 @@ warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 echo -e "${BOLD}${CYAN}"
 echo '  ╔══════════════════════════════════════════════╗'
 echo '  ║  OPSORA — Claude Code + NVIDIA (Termux)      ║'
-echo '  ║  Full-power models via LiteLLM gateway       ║'
+echo '  ║  Lightweight proxy — no LiteLLM required     ║'
 echo '  ╚══════════════════════════════════════════════╝'
 echo -e "${NC}"
 
@@ -35,10 +35,15 @@ ok "Node $(node -v 2>/dev/null || echo '?') / Python $(python3 -V)"
 INSTALL_DIR="${OPSORA_CLAUDE_DIR:-$HOME/.opsora/claude-code}"
 REPO_DIR="${OPSORA_REPO_DIR:-$HOME/opsora-cli}"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN_DIR="$HOME/.local/bin"
+NPM_PREFIX="${NPM_CONFIG_PREFIX:-$HOME/.npm-global}"
+NODE="${TERMUX_NODE:-$PREFIX/bin/node}"
+CLAUDE_VERSION="${CLAUDE_CODE_VERSION:-2.1.112}"
 
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$HOME/.claude"
-mkdir -p "$HOME/.local/bin"
+mkdir -p "$BIN_DIR"
+mkdir -p "$NPM_PREFIX/bin"
 
 # ── Clone opsora-cli jika belum ada ─────────────────────────────
 if [[ ! -d "$REPO_DIR/.git" ]]; then
@@ -49,7 +54,7 @@ fi
 
 # Copy config files
 info "Installing configs ke $INSTALL_DIR..."
-cp -f "$REPO_DIR/claude-code-termux/litellm-config.yaml" "$INSTALL_DIR/"
+cp -f "$REPO_DIR/claude-code-termux/nvidia-proxy.py" "$INSTALL_DIR/"
 cp -f "$REPO_DIR/claude-code-termux/models.json" "$INSTALL_DIR/"
 cp -f "$REPO_DIR/claude-code-termux/settings.json" "$INSTALL_DIR/"
 cp -f "$REPO_DIR/claude-code-termux/"*.sh "$INSTALL_DIR/"
@@ -60,18 +65,51 @@ if [[ ! -f "$INSTALL_DIR/secrets.env" ]]; then
   warn "Edit API key: nano $INSTALL_DIR/secrets.env"
 fi
 
-# ── Python: LiteLLM gateway ─────────────────────────────────────
-info "Installing LiteLLM..."
-pip install --upgrade pip
-pip install 'litellm[proxy]' httpx
+resolve_claude_cli() {
+  local candidates=(
+    "$NPM_PREFIX/lib/node_modules/@anthropic-ai/claude-code/cli.js"
+    "$(npm root -g 2>/dev/null)/@anthropic-ai/claude-code/cli.js"
+  )
+  local c
+  for c in "${candidates[@]}"; do
+    if [[ -f "$c" ]]; then
+      echo "$c"
+      return 0
+    fi
+  done
+  return 1
+}
 
-# ── Claude Code CLI ─────────────────────────────────────────────
-if ! command -v claude >/dev/null 2>&1; then
-  info "Installing Claude Code..."
-  npm install -g @anthropic-ai/claude-code 2>/dev/null \
-    || curl -fsSL https://claude.ai/install.sh | bash 2>/dev/null \
-    || warn "Install Claude Code manual: npm i -g @anthropic-ai/claude-code"
+fix_claude_shebang() {
+  local cli="$1"
+  if [[ -f "$cli" ]] && head -1 "$cli" | grep -qE '^#!/usr/bin/env node'; then
+    sed -i '1s|#!/usr/bin/env node|#!'"$PREFIX"'/bin/node|' "$cli"
+    ok "Shebang diperbaiki di cli.js"
+  fi
+}
+
+# ── npm global prefix (Termux tidak punya /usr/bin/env) ─────────
+if ! grep -q 'npm-global' "$HOME/.bashrc" 2>/dev/null; then
+  {
+    echo 'export NPM_CONFIG_PREFIX="$HOME/.npm-global"'
+    echo 'export PATH="$HOME/.npm-global/bin:$PATH"'
+  } >>"$HOME/.bashrc"
 fi
+export NPM_CONFIG_PREFIX="$NPM_PREFIX"
+export PATH="$NPM_PREFIX/bin:$PATH"
+
+# ── Claude Code CLI (pin 2.1.112 — versi JS; native binary rusak di Android)
+info "Installing Claude Code @${CLAUDE_VERSION}..."
+if ! resolve_claude_cli >/dev/null 2>&1; then
+  npm install -g "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
+    || warn "Install manual: npm install -g @anthropic-ai/claude-code@${CLAUDE_VERSION}"
+fi
+
+CLAUDE_CLI="$(resolve_claude_cli)" || {
+  warn "Claude Code belum terpasang — jalankan fix-claude-termux.sh setelah npm install"
+  CLAUDE_CLI="$NPM_PREFIX/lib/node_modules/@anthropic-ai/claude-code/cli.js"
+}
+fix_claude_shebang "$CLAUDE_CLI"
 
 # ── Claude settings.json ────────────────────────────────────────
 if [[ ! -f "$HOME/.claude/settings.json" ]]; then
@@ -82,7 +120,6 @@ else
 fi
 
 # ── Shell helpers ───────────────────────────────────────────────
-BIN_DIR="$HOME/.local/bin"
 cat >"$BIN_DIR/opsora-gateway" <<'WRAP'
 #!/data/data/com.termux/files/usr/bin/bash
 exec "$HOME/.opsora/claude-code/start-gateway.sh" "$@"
@@ -91,12 +128,12 @@ cat >"$BIN_DIR/opsora-model" <<'WRAP'
 #!/data/data/com.termux/files/usr/bin/bash
 exec "$HOME/.opsora/claude-code/switch-model.sh" "$@"
 WRAP
-cat >"$BIN_DIR/opsora-claude" <<'WRAP'
+cat >"$BIN_DIR/opsora-claude" <<WRAP
 #!/data/data/com.termux/files/usr/bin/bash
-INSTALL_DIR="${OPSORA_CLAUDE_DIR:-$HOME/.opsora/claude-code}"
-[[ -f "$INSTALL_DIR/secrets.env" ]] && source "$INSTALL_DIR/secrets.env"
-"$INSTALL_DIR/start-gateway.sh" 2>/dev/null || true
-exec claude "$@"
+INSTALL_DIR="\${OPSORA_CLAUDE_DIR:-\$HOME/.opsora/claude-code}"
+[[ -f "\$INSTALL_DIR/secrets.env" ]] && source "\$INSTALL_DIR/secrets.env"
+"\$INSTALL_DIR/start-gateway.sh" 2>/dev/null || true
+exec "${NODE}" "${CLAUDE_CLI}" "\$@"
 WRAP
 chmod +x "$BIN_DIR/opsora-gateway" "$BIN_DIR/opsora-model" "$BIN_DIR/opsora-claude"
 
@@ -119,12 +156,14 @@ echo "     opsora-gateway"
 echo ""
 echo "  3. Pilih model (opsional):"
 echo "     opsora-model power      # Llama 3.3 70B — full power"
-echo "     opsora-model coder      # DeepSeek V4 Flash"
-echo "     opsora-model fast       # Ministral 14B — ringan"
+echo "     opsora-model balanced   # Llama 3.1 70B — sehari-hari"
+echo "     opsora-model fast       # Llama 3.1 8B — ringan"
 echo ""
 echo "  4. Jalankan Claude Code:"
 echo "     opsora-claude"
-echo "     # atau: claude"
+echo ""
+echo "Sudah install tapi wrapper error? Jalankan:"
+echo "  bash $REPO_DIR/claude-code-termux/fix-claude-termux.sh"
 echo ""
 echo "Model tersedia: power, balanced, coder, reasoning, nemotron, fast, qwen-plus, qwen-max, local"
 echo "Detail: cat $INSTALL_DIR/models.json | jq '.profiles | keys'"

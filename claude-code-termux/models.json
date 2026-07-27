@@ -40,7 +40,7 @@
     },
     "fast": {
       "claude_model": "opsora-fast",
-      "nvidia_id": "mistralai/ministral-14b-instruct-2512",
+      "nvidia_id": "meta/llama-3.1-8b-instruct",
       "label": "Fast — background & ringan",
       "context": "128K",
       "tier": "fast"

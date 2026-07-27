@@ -1,47 +1,54 @@
 {
-  "version": "1.0",
+  "version": "2.1",
   "provider": "Opsora LiteLLM Gateway",
   "api_base": "https://integrate.api.nvidia.com/v1",
   "profiles": {
-    "power": {
-      "claude_model": "opsora-power",
-      "nvidia_id": "meta/llama-3.3-70b-instruct",
-      "label": "Full Power — coding & arsitektur",
-      "context": "128K",
-      "tier": "deep"
-    },
     "balanced": {
       "claude_model": "opsora-balanced",
       "nvidia_id": "meta/llama-3.1-70b-instruct",
-      "label": "Balanced — sehari-hari",
+      "label": "Balanced — sehari-hari (verified)",
       "context": "128K",
       "tier": "balanced"
     },
-    "coder": {
-      "claude_model": "opsora-coder",
-      "nvidia_id": "deepseek-ai/deepseek-v4-flash",
-      "label": "Coder — refactor & debug",
+    "fast": {
+      "claude_model": "opsora-fast",
+      "nvidia_id": "meta/llama-3.1-8b-instruct",
+      "label": "Fast — background & ringan (verified)",
+      "context": "128K",
+      "tier": "fast"
+    },
+    "power": {
+      "claude_model": "opsora-power",
+      "nvidia_id": "deepseek-ai/deepseek-v4-pro",
+      "label": "Full power — coding & arsitektur (verified)",
       "context": "128K",
       "tier": "deep"
     },
+    "coder": {
+      "claude_model": "opsora-coder",
+      "nvidia_id": "deepseek-ai/deepseek-v4-pro",
+      "label": "Coder — refactor & debug (verified)",
+      "context": "128K",
+      "tier": "coder"
+    },
     "reasoning": {
       "claude_model": "opsora-reasoning",
-      "nvidia_id": "deepseek-ai/deepseek-r1",
-      "label": "Reasoning — analisis kompleks",
-      "context": "64K",
+      "nvidia_id": "nvidia/nemotron-3-super-120b-a12b",
+      "label": "Reasoning — flagship NVIDIA (verified)",
+      "context": "128K",
       "tier": "deep"
     },
     "nemotron": {
       "claude_model": "opsora-nemotron",
-      "nvidia_id": "nvidia/nemotron-4-340b-instruct",
-      "label": "Nemotron 340B — flagship NVIDIA",
+      "nvidia_id": "nvidia/nemotron-3-super-120b-a12b",
+      "label": "Nemotron 3 Super 120B (verified)",
       "context": "128K",
-      "tier": "deep"
+      "tier": "max"
     },
-    "fast": {
-      "claude_model": "opsora-fast",
-      "nvidia_id": "mistralai/ministral-14b-instruct-2512",
-      "label": "Fast — background & ringan",
+    "nano": {
+      "claude_model": "opsora-nano",
+      "nvidia_id": "nvidia/nemotron-3-nano-30b-a3b",
+      "label": "Nano — efisien di HP (verified)",
       "context": "128K",
       "tier": "fast"
     },
@@ -49,17 +56,9 @@
       "claude_model": "opsora-qwen-plus",
       "provider": "Alibaba",
       "nvidia_id": "qwen-plus",
-      "label": "Qwen Plus — Alibaba cloud",
+      "label": "Qwen Plus — fallback Alibaba",
       "context": "128K",
       "tier": "balanced"
-    },
-    "qwen-max": {
-      "claude_model": "opsora-qwen-max",
-      "provider": "Alibaba",
-      "nvidia_id": "qwen-max",
-      "label": "Qwen Max — full power Alibaba",
-      "context": "128K",
-      "tier": "deep"
     },
     "local": {
       "claude_model": "opsora-local",
@@ -71,10 +70,19 @@
     }
   },
   "recommended": {
-    "default": "power",
+    "default": "balanced",
     "background": "fast",
     "coding": "coder",
     "architecture": "power",
+    "flagship": "nemotron",
+    "mobile": "nano",
     "offline": "local"
+  },
+  "agent_stack": {
+    "memory": true,
+    "cache": true,
+    "skills": true,
+    "context_compression": true,
+    "max_context_tokens": 24000
   }
 }

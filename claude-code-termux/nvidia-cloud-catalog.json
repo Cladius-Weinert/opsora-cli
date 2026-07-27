@@ -38,30 +38,30 @@
     "power": {
       "claude_model": "opsora-power",
       "backend": "integrate",
-      "model_id": "meta/llama-3.3-70b-instruct",
-      "label": "Full power Llama 3.3 70B",
+      "model_id": "deepseek-ai/deepseek-v4-pro",
+      "label": "Full power coding — verified",
       "tier": "deep"
     },
     "coder": {
       "claude_model": "opsora-coder",
       "backend": "integrate",
-      "model_id": "meta/llama-3.1-70b-instruct",
-      "label": "Coding — Llama 3.1 70B (verified)",
+      "model_id": "deepseek-ai/deepseek-v4-pro",
+      "label": "Coding — DeepSeek V4 Pro (verified)",
       "tier": "coder"
-    },
-    "mixtral": {
-      "claude_model": "opsora-mixtral",
-      "backend": "integrate",
-      "model_id": "mistralai/mixtral-8x22b-v0.1",
-      "label": "Mixtral 8x22B MoE",
-      "tier": "deep"
     },
     "nemotron": {
       "claude_model": "opsora-nemotron",
       "backend": "integrate",
-      "model_id": "nvidia/llama-3.1-nemotron-ultra-253b-v1",
-      "label": "Nemotron Ultra 253B — flagship",
+      "model_id": "nvidia/nemotron-3-super-120b-a12b",
+      "label": "Nemotron 3 Super 120B — verified",
       "tier": "max"
+    },
+    "nano": {
+      "claude_model": "opsora-nano",
+      "backend": "integrate",
+      "model_id": "nvidia/nemotron-3-nano-30b-a3b",
+      "label": "Nano — efisien di HP",
+      "tier": "fast"
     },
     "nvcf-gemma": {
       "claude_model": "opsora-nvcf-gemma",

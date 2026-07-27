@@ -43,12 +43,39 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 # Workspace Configuration
 # ============================================================================
 
-WORKSPACE_ROOT = Path("/home/ubuntu")
-OPSORA_ENV_FILE = WORKSPACE_ROOT / ".opsora_env"
-OPSORA_DIR = WORKSPACE_ROOT / ".opsora"
-OPSORA_DIR.mkdir(exist_ok=True)
+from opsora.cache import cache_stats, purge_expired
+from opsora.config import get_paths
+from opsora.context import ContextEngine, prepare_turn
+from opsora.memory import memory_stats
+from opsora.skills import list_skills
+from opsora.tools import execute_tool as core_execute_tool
+
+_paths = get_paths()
+WORKSPACE_ROOT = _paths.workspace_root
+OPSORA_ENV_FILE = Path(os.environ.get("OPSORA_ENV_FILE", Path.home() / ".opsora_env"))
+OPSORA_DIR = _paths.opsora_dir
+OPSORA_DIR.mkdir(parents=True, exist_ok=True)
 TOKEN_USAGE_FILE = OPSORA_DIR / "token_usage.json"
 SESSION_LOG_FILE = OPSORA_DIR / "session.log"
+CONTEXT_ENGINE = ContextEngine(
+    """You are Opsora, a powerful terminal-based AI coding assistant.
+
+## Capabilities
+- Write, edit, review, and debug code in any language
+- Execute shell commands and AWS operations
+- Query project memory and Graphify knowledge graph
+- Load specialized skills for NVIDIA, Termux, and project workflows
+- Multi-provider model routing for optimal cost/performance
+
+## Guidelines
+- Be direct, precise, and concise
+- Use code blocks for all code snippets
+- Show file paths when referencing files
+- Prefer Indonesian for Indonesian input, English otherwise
+- Use tools proactively when they help answer the question
+- Search memory and skills before large multi-file changes
+- YOLO mode: execute commands without asking for confirmation when safe"""
+)
 
 # Load environment from .opsora_env
 def load_env_file(path: Path) -> None:
@@ -345,6 +372,26 @@ SAFE_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "skill_list",
+            "description": "List available Opsora skills (Cursor, Codex, bundled)",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "skill_match",
+            "description": "Find skills relevant to the current task",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "read_file",
             "description": "Read a local text file (requires approval)",
             "parameters": {"type": "object", "properties": {"filepath": {"type": "string"}}, "required": ["filepath"]},
@@ -377,75 +424,9 @@ SAFE_TOOLS = [
 ]
 
 def execute_tool(name: str, args: dict[str, Any]) -> str:
-    """Execute a tool call with full integration"""
+    """Execute a tool call with caching, memory, and skills integration."""
     try:
-        # Memory tools
-        if name == "memory_add":
-            sys.path.insert(0, str(WORKSPACE_ROOT))
-            from opsora_memory import add_memory
-            return add_memory(args.get("text", ""), source=args.get("source", "cli"))
-
-        if name == "memory_search":
-            sys.path.insert(0, str(WORKSPACE_ROOT))
-            from opsora_memory import search_memory
-            return json.dumps(search_memory(args.get("query", ""), args.get("limit", 5)), ensure_ascii=False)
-
-        # Graphify
-        if name == "graphify_query":
-            sys.path.insert(0, str(WORKSPACE_ROOT))
-            from opsora_tools import graphify_query
-            return graphify_query(args.get("query", ""), depth=args.get("depth", 2))
-
-        # Workspace status
-        if name == "workspace_status":
-            sys.path.insert(0, str(WORKSPACE_ROOT))
-            from opsora_tools import workspace_status
-            return json.dumps(workspace_status(), ensure_ascii=False)
-
-        # File operations (with YOLO mode = auto-approve for safe reads)
-        if name == "read_file":
-            filepath = Path(args["filepath"])
-            if not filepath.is_absolute():
-                filepath = WORKSPACE_ROOT / filepath
-            # Security check
-            lowered = {p.casefold() for p in filepath.resolve().parts}
-            blocked = {".aws", ".ssh", ".gnupg"}
-            if lowered & blocked:
-                return "ERROR: Access to credential directories is blocked."
-            return filepath.read_text(encoding="utf-8", errors="replace")[:50000]
-
-        if name == "write_file":
-            filepath = Path(args["filepath"])
-            if not filepath.is_absolute():
-                filepath = WORKSPACE_ROOT / filepath
-            filepath.parent.mkdir(parents=True, exist_ok=True)
-            filepath.write_text(str(args.get("content", "")), encoding="utf-8")
-            return f"✓ Wrote {len(args.get('content', ''))} chars to {filepath}"
-
-        # Shell execution (YOLO mode enabled)
-        if name == "run_command":
-            cmd = str(args["command"])
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120, cwd=WORKSPACE_ROOT)
-            output = (result.stdout or "") + (result.stderr or "")
-            return output[:50000] or f"Command exited with code {result.returncode}."
-
-        # AWS read-only
-        if name == "aws_command":
-            cmd_args = shlex.split(str(args["arguments"]))
-            # Only allow read-only operations
-            allowed_prefixes = ["get-", "describe-", "list-", "head-", "scan", "query"]
-            if len(cmd_args) >= 2:
-                op = cmd_args[1].lower()
-                if not any(op.startswith(p) for p in allowed_prefixes):
-                    return "ERROR: Only read-only AWS operations allowed (get/describe/list/head/scan/query)."
-            result = subprocess.run(
-                ["aws", "--profile", AWS_PROFILE] + cmd_args,
-                capture_output=True, text=True, timeout=60
-            )
-            return ((result.stdout or "") + (result.stderr or ""))[:50000]
-
-        return f"Unknown tool: {name}"
-
+        return core_execute_tool(name, args)
     except Exception as e:
         return f"Tool error: {type(e).__name__}: {e}"
 
@@ -453,22 +434,7 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
 # API Invocation with Full Fallback Chain
 # ============================================================================
 
-SYSTEM_PROMPT = """You are Opsora, a powerful terminal-based AI coding assistant.
-
-## Capabilities
-- Write, edit, review, and debug code in any language
-- Execute shell commands and AWS operations
-- Query project memory and Graphify knowledge graph
-- Work with files, agents, and cloud resources
-- Multi-provider model routing for optimal cost/performance
-
-## Guidelines
-- Be direct, precise, and concise
-- Use code blocks for all code snippets
-- Show file paths when referencing files
-- Prefer Indonesian for Indonesian input, English otherwise
-- Use tools proactively when they help answer the question
-- YOLO mode: execute commands without asking for confirmation when safe"""
+SYSTEM_PROMPT = CONTEXT_ENGINE.base_system_prompt
 
 def invoke_provider(provider: str, model: str, messages: list[dict], use_tools: bool = True) -> Any:
     """Invoke a specific provider with tool support"""
@@ -628,8 +594,9 @@ def build_welcome_panel(selection: Selection) -> Panel:
         f"  • {len(agent_files)} agent files in workspace\n"
         f"  • {len(claude_files)} Claude agent files\n"
         f"  • {len(opsora_files)} Opsora CLI files\n"
-        f"  • Memory: opsora_memory.py ✓\n"
-        f"  • Graphify: opsora_tools.py ✓\n"
+        f"  • Memory: {memory_stats()['count']} records in {memory_stats()['db_path']}\n"
+        f"  • Skills: {len(list_skills())} loaded\n"
+        f"  • Cache: {cache_stats()['active_entries']} active entries\n"
         f"  • AWS: profile={AWS_PROFILE}, region={AWS_REGION}\n"
         f"  • NVIDIA API: {'✓' if NVIDIA_API_KEY else '✗'}\n"
         f"  • Alibaba/DashScope: {'✓' if DASHSCOPE_API_KEY else '✗'}\n"
@@ -734,6 +701,8 @@ def handle_command(value: str, history: list[dict]) -> tuple[bool, Optional[Sele
             "[bold]/read <file>[/bold]   Quick file read\n"
             "[bold]/graphify <q>[/bold]  Quick graph query\n"
             "[bold]/memory <q>[/bold]    Quick memory search\n"
+            "[bold]/skills[/bold]        List loaded skills\n"
+            "[bold]/cache[/bold]         Show cache statistics\n"
             "[bold]/exit[/bold]          Exit Opsora",
             title="[bold cyan]Opsora Commands[/bold cyan]",
             border_style="cyan",
@@ -844,6 +813,32 @@ def handle_command(value: str, history: list[dict]) -> tuple[bool, Optional[Sele
         console.print(Panel(result[:5000], title=f"Memory: {query}", border_style="cyan", box=box.ROUNDED))
         return True, None
 
+    elif cmd == "/skills":
+        skills = list_skills()
+        table = Table(title="Loaded Skills", box=box.ROUNDED, border_style="cyan")
+        table.add_column("Name", style="cyan")
+        table.add_column("Source")
+        table.add_column("Description")
+        for skill in skills:
+            table.add_row(skill.name, skill.source, skill.description[:80])
+        console.print(table)
+        return True, None
+
+    elif cmd == "/cache":
+        removed = purge_expired()
+        stats = cache_stats()
+        console.print(Panel(
+            f"Active entries: {stats['active_entries']}\n"
+            f"Total entries: {stats['total_entries']}\n"
+            f"Cache hits: {stats['total_hits']}\n"
+            f"Expired purged: {removed}\n"
+            f"DB: {stats['db_path']}",
+            title="Opsora Cache",
+            border_style="green",
+            box=box.ROUNDED,
+        ))
+        return True, None
+
     else:
         console.print(f"[red]Unknown command:[/red] {cmd}. Type [bold]/help[/bold] for commands.")
         return True, None
@@ -852,12 +847,21 @@ def handle_command(value: str, history: list[dict]) -> tuple[bool, Optional[Sele
 # Main Loop
 # ============================================================================
 
-def run_turn(history: list[dict], current_selection: Selection) -> tuple[list[dict], Selection]:
-    """Run a single conversation turn with tool calling"""
+def run_turn(history: list[dict], current_selection: Selection, user_message: str) -> tuple[list[dict], Selection]:
+    """Run a single conversation turn with tool calling, context, and cache."""
     MAX_TOOL_ROUNDS = 5
+    system_prompt, working_history, bundle = prepare_turn(user_message, history, SYSTEM_PROMPT)
 
-    for round_idx in range(MAX_TOOL_ROUNDS):
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}, *history]
+    if bundle.memory_hits or bundle.skills:
+        hints = []
+        if bundle.memory_hits:
+            hints.append(f"{len(bundle.memory_hits)} memory hits")
+        if bundle.skills:
+            hints.append(f"{len(bundle.skills)} skills")
+        console.print(f"[dim]Context loaded: {', '.join(hints)}[/]")
+
+    for _round_idx in range(MAX_TOOL_ROUNDS):
+        messages = [{"role": "system", "content": system_prompt}, *working_history]
 
         try:
             # Show thinking status
@@ -908,17 +912,22 @@ def run_turn(history: list[dict], current_selection: Selection) -> tuple[list[di
 
                     # Add tool result to history
                     tool_call_id = getattr(tc, "id", None) if not isinstance(tc, dict) else tc.get("id")
-                    history.append({
+                    tool_message = {
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "name": name,
                         "content": output,
-                    })
+                    }
+                    history.append(tool_message)
+                    working_history.append(tool_message)
 
                 # Continue to next round for tool results
                 continue
             else:
-                # No tool calls, turn complete
+                if content:
+                    assistant_message = {"role": "assistant", "content": content}
+                    history.append(assistant_message)
+                    working_history.append(assistant_message)
                 break
 
         except Exception as e:
@@ -935,11 +944,12 @@ def main():
         prompt = " ".join(sys.argv[1:])
         selection = auto_select_model(prompt)
         history = [{"role": "user", "content": prompt}]
+        system_prompt, working_history, _bundle = prepare_turn(prompt, history, SYSTEM_PROMPT)
 
         with console.status(f"[cyan]⠋ {selection.provider}:{selection.model} thinking…[/cyan]", spinner="dots"):
             try:
                 response, selection = call_with_fallback(
-                    [{"role": "system", "content": SYSTEM_PROMPT}, *history],
+                    [{"role": "system", "content": system_prompt}, *working_history],
                     selection,
                     use_tools=True
                 )
@@ -1002,7 +1012,7 @@ def main():
             history.append({"role": "user", "content": prompt})
 
             # Run the turn
-            history, selection = run_turn(history, selection)
+            history, selection = run_turn(history, selection, prompt)
 
             console.print(f"[dim]{'─' * 60}[/dim]")
 

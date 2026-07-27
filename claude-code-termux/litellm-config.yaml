@@ -3,7 +3,7 @@
 # Catalog: opsora-cli/claude-code-termux/nvidia-cloud-catalog.json
 
 model_list:
-  # ── VERIFIED (Integrate API) ──────────────────────────────────────
+  # ── VERIFIED (Integrate API — account tested) ─────────────────────
   - model_name: opsora-balanced
     litellm_params:
       model: nvidia_nim/meta/llama-3.1-70b-instruct
@@ -16,25 +16,37 @@ model_list:
 
   - model_name: opsora-power
     litellm_params:
-      model: nvidia_nim/meta/llama-3.3-70b-instruct
+      model: nvidia_nim/deepseek-ai/deepseek-v4-pro
       api_key: os.environ/NVIDIA_API_KEY
       timeout: 120
 
   - model_name: opsora-coder
     litellm_params:
-      model: nvidia_nim/meta/llama-3.1-70b-instruct
+      model: nvidia_nim/deepseek-ai/deepseek-v4-pro
       api_key: os.environ/NVIDIA_API_KEY
+      timeout: 120
 
-  - model_name: opsora-mixtral
+  - model_name: opsora-reasoning
     litellm_params:
-      model: nvidia_nim/mistralai/mixtral-8x22b-v0.1
+      model: nvidia_nim/nvidia/nemotron-3-super-120b-a12b
       api_key: os.environ/NVIDIA_API_KEY
+      timeout: 180
 
   - model_name: opsora-nemotron
     litellm_params:
-      model: nvidia_nim/nvidia/llama-3.1-nemotron-ultra-253b-v1
+      model: nvidia_nim/nvidia/nemotron-3-super-120b-a12b
       api_key: os.environ/NVIDIA_API_KEY
       timeout: 180
+
+  - model_name: opsora-nano
+    litellm_params:
+      model: nvidia_nim/nvidia/nemotron-3-nano-30b-a3b
+      api_key: os.environ/NVIDIA_API_KEY
+
+  - model_name: opsora-mistral
+    litellm_params:
+      model: nvidia_nim/mistralai/mistral-nemotron
+      api_key: os.environ/NVIDIA_API_KEY
 
   # ── NVCF Cloud Functions (NVIDIA Console) ─────────────────────────
   - model_name: opsora-nvcf-gemma
@@ -65,6 +77,10 @@ litellm_settings:
   drop_params: true
   set_verbose: false
   request_timeout: 120
+  cache: true
+  cache_params:
+    type: local
+    ttl: 3600
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY

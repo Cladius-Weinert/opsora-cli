@@ -1,0 +1,61 @@
+# Opsora Claude Code — LiteLLM gateway
+# Translates Anthropic Messages API → NVIDIA / Alibaba / OpenAI-compatible providers
+# Docs: https://docs.litellm.ai/docs/providers/nvidia_nim
+
+model_list:
+  # ── NVIDIA Integrate — full power tier ─────────────────────────────
+  - model_name: opsora-power
+    litellm_params:
+      model: nvidia_nim/meta/llama-3.3-70b-instruct
+      api_key: os.environ/NVIDIA_API_KEY
+
+  - model_name: opsora-balanced
+    litellm_params:
+      model: nvidia_nim/meta/llama-3.1-70b-instruct
+      api_key: os.environ/NVIDIA_API_KEY
+
+  - model_name: opsora-fast
+    litellm_params:
+      model: nvidia_nim/mistralai/ministral-14b-instruct-2512
+      api_key: os.environ/NVIDIA_API_KEY
+
+  - model_name: opsora-coder
+    litellm_params:
+      model: nvidia_nim/deepseek-ai/deepseek-v4-flash
+      api_key: os.environ/NVIDIA_API_KEY
+
+  - model_name: opsora-reasoning
+    litellm_params:
+      model: nvidia_nim/deepseek-ai/deepseek-r1
+      api_key: os.environ/NVIDIA_API_KEY
+
+  - model_name: opsora-nemotron
+    litellm_params:
+      model: nvidia_nim/nvidia/nemotron-4-340b-instruct
+      api_key: os.environ/NVIDIA_API_KEY
+
+  # ── Alibaba DashScope (optional — set DASHSCOPE_API_KEY) ───────────
+  - model_name: opsora-qwen-plus
+    litellm_params:
+      model: openai/qwen-plus
+      api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+      api_key: os.environ/DASHSCOPE_API_KEY
+
+  - model_name: opsora-qwen-max
+    litellm_params:
+      model: openai/qwen-max
+      api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+      api_key: os.environ/DASHSCOPE_API_KEY
+
+  # ── Local Ollama (optional — Termux: ollama serve) ─────────────────
+  - model_name: opsora-local
+    litellm_params:
+      model: ollama/qwen2.5-coder:7b
+      api_base: http://127.0.0.1:11434
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

@@ -70,7 +70,27 @@ opsora
 
 ---
 
-## 3. Deploy semua (master script)
+## 3. Connect compute (NVIDIA + gateway)
+
+Jalankan dari mana saja dengan Opsora Personal Key:
+
+```bash
+export NVIDIA_API_KEY=nvapi-...
+export NGC_ORG_ID=1006275399815502
+bash deploy/connect-compute.sh
+```
+
+Ini akan:
+1. Build NVIDIA catalog (102 model + NVCF)
+2. Generate `~/.opsora/compute-registry.json`
+3. Start LiteLLM gateway di `:4000` (12 model profiles)
+4. Smoke test `opsora-fast`
+
+Gateway endpoint: `http://127.0.0.1:4000/v1` (auth: `LITELLM_MASTER_KEY`)
+
+Run:ai SaaS tenant: https://opsora.nv.run.ai — lihat `deploy/runai-connect.md`
+
+## 4. Deploy semua (master script)
 
 ```bash
 bash deploy/deploy-all.sh

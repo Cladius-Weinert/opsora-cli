@@ -1,0 +1,247 @@
+{
+  "security": {
+    "auth": {
+      "selectedType": "openai"
+    }
+  },
+  "model": {
+    "name": "qwen3-coder-plus",
+    "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "reasoningEffort": "high",
+    "maxSubagentDepth": 3,
+    "sessionTokenLimit": -1
+  },
+  "fastModel": "openai:qwen3-coder-flash",
+  "modelFallbacks": "qwen3-coder-flash,deepseek-ai/deepseek-v4-flash,meta/llama-3.1-8b-instruct",
+  "agents": {
+    "builtin": {
+      "exploreModel": "fast"
+    }
+  },
+  "ui": {
+    "enableCacheSharing": true
+  },
+  "context": {
+    "autoCompactThreshold": 0.85
+  },
+  "modelProviders": {
+    "openai": {
+      "protocol": "openai",
+      "models": [
+        {
+          "id": "qwen3-coder-plus",
+          "name": "Qwen3 Coder Plus (default)",
+          "description": "Full power coding — 1M context, DashScope intl",
+          "envKey": "DASHSCOPE_API_KEY",
+          "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+          "generationConfig": {
+            "timeout": 300000,
+            "maxRetries": 5,
+            "retryInitialDelayMs": 2000,
+            "retryMaxDelayMs": 120000,
+            "enableCacheControl": true,
+            "contextWindowSize": 1000000,
+            "splitToolMedia": true,
+            "toolResultContentFormat": "parts",
+            "samplingParams": {
+              "temperature": 0.2,
+              "top_p": 0.9,
+              "max_tokens": 16384
+            }
+          }
+        },
+        {
+          "id": "qwen3-coder-next",
+          "name": "Qwen3 Coder Next",
+          "description": "Latest coder variant — DashScope intl",
+          "envKey": "DASHSCOPE_API_KEY",
+          "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+          "generationConfig": {
+            "timeout": 300000,
+            "maxRetries": 5,
+            "retryInitialDelayMs": 2000,
+            "retryMaxDelayMs": 120000,
+            "enableCacheControl": true,
+            "contextWindowSize": 1000000,
+            "samplingParams": {
+              "temperature": 0.2,
+              "max_tokens": 16384
+            }
+          }
+        },
+        {
+          "id": "qwen3.7-max",
+          "name": "Qwen3.7 Max (reasoning)",
+          "description": "Deep reasoning + enable_thinking — 1M context",
+          "envKey": "DASHSCOPE_API_KEY",
+          "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+          "generationConfig": {
+            "timeout": 300000,
+            "maxRetries": 5,
+            "retryInitialDelayMs": 3000,
+            "retryMaxDelayMs": 120000,
+            "enableCacheControl": true,
+            "contextWindowSize": 1000000,
+            "extra_body": {
+              "enable_thinking": true,
+              "preserve_thinking": true
+            },
+            "samplingParams": {
+              "temperature": 0.15,
+              "max_tokens": 16384
+            }
+          }
+        },
+        {
+          "id": "qwen3.7-plus",
+          "name": "Qwen3.7 Plus",
+          "description": "Balanced power + thinking — 1M context",
+          "envKey": "DASHSCOPE_API_KEY",
+          "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+          "generationConfig": {
+            "timeout": 180000,
+            "maxRetries": 5,
+            "retryInitialDelayMs": 2000,
+            "retryMaxDelayMs": 90000,
+            "enableCacheControl": true,
+            "contextWindowSize": 1000000,
+            "extra_body": {
+              "enable_thinking": true
+            },
+            "samplingParams": {
+              "temperature": 0.3,
+              "max_tokens": 8192
+            }
+          }
+        },
+        {
+          "id": "qwen3-coder-flash",
+          "name": "Qwen3 Coder Flash (fast)",
+          "description": "Sub-agent / background — high RPM tolerance",
+          "envKey": "DASHSCOPE_API_KEY",
+          "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+          "generationConfig": {
+            "timeout": 60000,
+            "maxRetries": 3,
+            "retryInitialDelayMs": 1000,
+            "retryMaxDelayMs": 30000,
+            "enableCacheControl": true,
+            "contextWindowSize": 1000000,
+            "extra_body": {
+              "enable_thinking": false
+            },
+            "samplingParams": {
+              "temperature": 0.4,
+              "max_tokens": 4096
+            }
+          }
+        },
+        {
+          "id": "deepseek-ai/deepseek-v4-flash",
+          "name": "NVIDIA DeepSeek V4 Flash",
+          "description": "Fast NVIDIA coding + reasoning",
+          "envKey": "NVIDIA_API_KEY",
+          "baseUrl": "https://integrate.api.nvidia.com/v1",
+          "generationConfig": {
+            "timeout": 120000,
+            "maxRetries": 5,
+            "retryInitialDelayMs": 2000,
+            "retryMaxDelayMs": 90000,
+            "contextWindowSize": 131072,
+            "extra_body": {
+              "enable_thinking": true
+            },
+            "samplingParams": {
+              "temperature": 0.2,
+              "max_tokens": 8192
+            }
+          }
+        },
+        {
+          "id": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+          "name": "NVIDIA Nemotron Super 49B (reasoning)",
+          "description": "Reasoning model — output di reasoning_content",
+          "envKey": "NVIDIA_API_KEY",
+          "baseUrl": "https://integrate.api.nvidia.com/v1",
+          "generationConfig": {
+            "timeout": 300000,
+            "maxRetries": 4,
+            "retryInitialDelayMs": 3000,
+            "retryMaxDelayMs": 120000,
+            "contextWindowSize": 131072,
+            "extra_body": {
+              "enable_thinking": true,
+              "preserve_thinking": true
+            },
+            "samplingParams": {
+              "temperature": 0.15,
+              "max_tokens": 16384
+            }
+          }
+        },
+        {
+          "id": "nvidia/nemotron-3-super-120b-a12b",
+          "name": "NVIDIA Nemotron 3 Super 120B",
+          "description": "Flagship MoE — may 503 under load, fallback enabled",
+          "envKey": "NVIDIA_API_KEY",
+          "baseUrl": "https://integrate.api.nvidia.com/v1",
+          "generationConfig": {
+            "timeout": 300000,
+            "maxRetries": 5,
+            "retryInitialDelayMs": 3000,
+            "retryMaxDelayMs": 120000,
+            "contextWindowSize": 131072,
+            "extra_body": {
+              "enable_thinking": true
+            },
+            "samplingParams": {
+              "temperature": 0.15,
+              "max_tokens": 16384
+            }
+          }
+        },
+        {
+          "id": "meta/llama-3.1-8b-instruct",
+          "name": "NVIDIA Llama 3.1 8B (fast)",
+          "description": "Background / RPM overflow — verified fast",
+          "envKey": "NVIDIA_API_KEY",
+          "baseUrl": "https://integrate.api.nvidia.com/v1",
+          "generationConfig": {
+            "timeout": 60000,
+            "maxRetries": 3,
+            "retryInitialDelayMs": 1000,
+            "retryMaxDelayMs": 30000,
+            "contextWindowSize": 131072,
+            "samplingParams": {
+              "temperature": 0.3,
+              "max_tokens": 4096
+            }
+          }
+        },
+        {
+          "id": "qwen3-coder-plus",
+          "name": "Coding Plan — Qwen3 Coder Plus",
+          "description": "Alibaba Coding Plan (key terpisah)",
+          "envKey": "BAILIAN_CODING_PLAN_API_KEY",
+          "baseUrl": "https://coding-intl.dashscope.aliyuncs.com/v1",
+          "generationConfig": {
+            "timeout": 180000,
+            "maxRetries": 5,
+            "retryInitialDelayMs": 1500,
+            "retryMaxDelayMs": 90000,
+            "enableCacheControl": true,
+            "contextWindowSize": 1000000,
+            "extra_body": {
+              "enable_thinking": true,
+              "preserve_thinking": true
+            },
+            "samplingParams": {
+              "temperature": 0.2,
+              "max_tokens": 16384
+            }
+          }
+        }
+      ]
+    }
+  }
+}

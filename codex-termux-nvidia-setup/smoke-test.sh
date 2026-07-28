@@ -39,7 +39,7 @@ FAILS=0
 
 OR_MODEL="${SMOKE_MODEL_OPENROUTER:-qwen/qwen3-coder}"
 LL_MODEL="${SMOKE_MODEL_LITELLM:-nvidia-qwen3-coder}"
-NV_MODEL="${SMOKE_MODEL_NVIDIA:-qwen/qwen3-coder-480b-a35b-instruct}"
+NV_MODEL="${SMOKE_MODEL_NVIDIA:-deepseek-ai/deepseek-v4-flash}"
 
 # Prefer LITELLM_BASE_URL from env; strip trailing slash
 LITELLM_URL="${LITELLM_BASE_URL:-http://127.0.0.1:4000/v1}"

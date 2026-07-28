@@ -25,19 +25,25 @@
 | `jq: not found` di smoke-test | jq belum terpasang | `pkg install jq` (Termux) / `apt install jq` (VPS) |
 | Responses body kosong / tool loop aneh | Model tidak bagus untuk agentic coding | Ganti profil `nvidia-qwen-coder` atau Anthropic via OpenRouter/LiteLLM |
 | `LD_LIBRARY_PATH` / `libc++_shared.so` errors | Binary native Termux fork | Reinstall `@mmmbuto/codex-cli-termux@latest`; jangan jalankan ELF dari lokasi yang memutus `RUNPATH=$ORIGIN` |
-| Rate limit 429 | Kuota provider / OR | Tunggu, ganti profil, atau naikkan limit di dashboard provider |
+| `qwen/qwen3-coder-480b-a35b-instruct` EOL / HTTP 410 | Model di-retire 2026-06-11 | Ganti ke `deepseek-ai/deepseek-v4-flash` atau `nvidia/nemotron-3-super-120b-a12b` |
+| `Unsupported parameter(s): client_metadata` via LiteLLM | Codex 0.145 kirim `client_metadata`; LiteLLM forward ke NVIDIA | Upgrade LiteLLM ke `main-latest` image, atau pakai **Path C** (NVIDIA langsung) |
+| `--profile X` error: legacy `[profiles.X]` | Codex ≥0.134 pindah profil ke file terpisah | Buat `~/.codex/X.config.toml` (script install sudah salin otomatis) |
+| `data did not match any variant of untagged enum InputParam` | NVIDIA `/responses` parsial untuk tool calls | Normal untuk sesi agentic panjang; gunakan model nemotron atau OpenRouter |
 
 ## Cek cepat
 
 ```bash
+# Path C (direct NVIDIA — recommended)
+bash smoke-test.sh nvidia
+codex --profile nvidia-deepseek-flash "print hello"
+
 # Path A
 bash smoke-test.sh openrouter
-codex --profile nvidia-qwen-coder "print hello"
+codex --profile or-deepseek-flash "print hello"
 
 # Path B
 bash smoke-test.sh litellm
-bash smoke-test.sh nvidia
-codex --profile litellm-qwen-coder "print hello"
+codex --profile litellm-deepseek-flash "print hello"
 ```
 
 ## Referensi endpoint

@@ -1,0 +1,3 @@
+# Profile: Anthropic Claude Sonnet via OpenRouter (Path A)
+model = "anthropic/claude-sonnet-4.5"
+model_provider = "openrouter"

@@ -1,0 +1,3 @@
+# Profile: NVIDIA Nemotron via LiteLLM proxy (Path B)
+model = "nvidia-nemotron-3-super"
+model_provider = "litellm_proxy"

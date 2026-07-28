@@ -120,6 +120,14 @@ if [[ -f "$ENV_SRC" ]]; then
   cp -f "$ENV_SRC" "$CODEX_HOME/.env.example"
 fi
 
+# Copy profile files for Codex ≥0.134 (separate .config.toml per profile)
+for prof in "$SRC_DIR"/dot-codex/*.config.toml; do
+  [[ -f "$prof" ]] || continue
+  dest="$CODEX_HOME/$(basename "$prof")"
+  cp -f "$prof" "$dest"
+  ok "Wrote $dest"
+done
+
 # ── Shell env loader ────────────────────────────────────────────
 BASHRC="$HOME/.bashrc"
 MARKER="# >>> codex-termux-nvidia >>>"
@@ -140,11 +148,10 @@ fi
 # Prefer ~/projects for all coding work (avoid /sdcard FUSE quirks)
 export CODEX_PROJECTS_DIR="${CODEX_PROJECTS_DIR:-$HOME/projects}"
 alias cdx='cd "$CODEX_PROJECTS_DIR" && codex'
-alias cdx-qwen='codex --profile nvidia-qwen-coder'
-alias cdx-flash='codex --profile nvidia-deepseek-flash'
+alias cdx-deepseek='codex --profile nvidia-deepseek-flash'
 alias cdx-nemo='codex --profile nvidia-nemotron'
 alias cdx-llama='codex --profile nvidia-llama70'
-alias cdx-litellm='codex --profile litellm-qwen-coder'
+alias cdx-litellm='codex --profile litellm-deepseek-flash'
 # <<< codex-termux-nvidia <<<
 EOF
   ok "Updated ~/.bashrc — run: source ~/.bashrc"

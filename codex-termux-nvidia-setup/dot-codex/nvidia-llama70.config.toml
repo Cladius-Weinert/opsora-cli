@@ -1,0 +1,3 @@
+# Profile: Meta Llama 3.3 70B via NVIDIA NIM
+model = "meta/llama-3.3-70b-instruct"
+model_provider = "nvidia_nim"

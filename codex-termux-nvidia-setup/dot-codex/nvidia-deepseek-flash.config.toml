@@ -1,0 +1,3 @@
+# Profile: NVIDIA DeepSeek V4 Flash (direct NIM)
+model = "deepseek-ai/deepseek-v4-flash"
+model_provider = "nvidia_nim"

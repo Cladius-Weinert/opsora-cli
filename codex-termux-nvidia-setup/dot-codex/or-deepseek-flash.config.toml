@@ -1,0 +1,3 @@
+# Profile: DeepSeek V4 Flash via OpenRouter (Path A)
+model = "deepseek/deepseek-v4-flash"
+model_provider = "openrouter"

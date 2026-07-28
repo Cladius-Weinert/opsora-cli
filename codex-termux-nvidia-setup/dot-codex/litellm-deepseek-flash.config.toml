@@ -1,0 +1,3 @@
+# Profile: DeepSeek V4 Flash via LiteLLM proxy (Path B)
+model = "nvidia-deepseek-v4-flash"
+model_provider = "litellm_proxy"

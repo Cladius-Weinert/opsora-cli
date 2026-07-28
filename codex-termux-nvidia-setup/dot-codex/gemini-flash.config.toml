@@ -1,0 +1,3 @@
+# Profile: Google Gemini 2.5 Flash via OpenRouter (Path A)
+model = "google/gemini-2.5-flash"
+model_provider = "openrouter"

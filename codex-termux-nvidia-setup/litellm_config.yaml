@@ -1,0 +1,147 @@
+# litellm_config.yaml — remote proxy for Codex (Responses API)
+#
+# Codex → POST /v1/responses (wire_api=responses)
+# LiteLLM → bridges to Chat Completions for chat-only backends
+#           via use_chat_completions_api: true
+#
+# NVIDIA NIM (integrate.api.nvidia.com) is Chat Completions ONLY.
+# Do NOT forward /responses natively to NVIDIA — always bridge.
+#
+# Deploy with: docker compose -f litellm-docker-compose.yml up -d
+# Or:          litellm --config litellm_config.yaml --port 4000 --host 0.0.0.0
+
+model_list:
+  # ══════════════════════════════════════════════════════════════
+  # NVIDIA NIM — integrate.api.nvidia.com (Chat Completions)
+  # Force Responses→Chat bridge with use_chat_completions_api
+  # Using openai/ + custom api_base (documented LiteLLM bridge path)
+  # ══════════════════════════════════════════════════════════════
+
+  - model_name: nvidia-qwen3-coder
+    litellm_params:
+      model: openai/qwen/qwen3-coder-480b-a35b-instruct
+      api_base: https://integrate.api.nvidia.com/v1
+      api_key: os.environ/NVIDIA_API_KEY
+      use_chat_completions_api: true
+      timeout: 180
+
+  - model_name: nvidia-deepseek-v4-flash
+    litellm_params:
+      model: openai/deepseek-ai/deepseek-v4-flash
+      api_base: https://integrate.api.nvidia.com/v1
+      api_key: os.environ/NVIDIA_API_KEY
+      use_chat_completions_api: true
+      timeout: 120
+
+  - model_name: nvidia-nemotron-3-super
+    litellm_params:
+      model: openai/nvidia/nemotron-3-super-120b-a12b
+      api_base: https://integrate.api.nvidia.com/v1
+      api_key: os.environ/NVIDIA_API_KEY
+      use_chat_completions_api: true
+      timeout: 180
+
+  - model_name: nvidia-llama-3.3-70b
+    litellm_params:
+      model: openai/meta/llama-3.3-70b-instruct
+      api_base: https://integrate.api.nvidia.com/v1
+      api_key: os.environ/NVIDIA_API_KEY
+      use_chat_completions_api: true
+      timeout: 120
+
+  # Alternate nvidia_nim/ prefix (same backends; still force chat bridge)
+  - model_name: nvidia-qwen3-coder-nim
+    litellm_params:
+      model: nvidia_nim/qwen/qwen3-coder-480b-a35b-instruct
+      api_base: https://integrate.api.nvidia.com/v1
+      api_key: os.environ/NVIDIA_API_KEY
+      use_chat_completions_api: true
+      timeout: 180
+
+  # ══════════════════════════════════════════════════════════════
+  # Groq — Chat Completions only → bridge required
+  # ══════════════════════════════════════════════════════════════
+
+  - model_name: groq-llama-3.3-70b
+    litellm_params:
+      model: openai/llama-3.3-70b-versatile
+      api_base: https://api.groq.com/openai/v1
+      api_key: os.environ/GROQ_API_KEY
+      use_chat_completions_api: true
+      timeout: 60
+
+  # ══════════════════════════════════════════════════════════════
+  # Together AI — Chat Completions only → bridge required
+  # ══════════════════════════════════════════════════════════════
+
+  - model_name: together-llama-3.3-70b
+    litellm_params:
+      model: openai/meta-llama/Llama-3.3-70B-Instruct-Turbo
+      api_base: https://api.together.xyz/v1
+      api_key: os.environ/TOGETHER_API_KEY
+      use_chat_completions_api: true
+      timeout: 120
+
+  # ══════════════════════════════════════════════════════════════
+  # DeepSeek — Chat Completions → bridge required for Codex
+  # ══════════════════════════════════════════════════════════════
+
+  - model_name: deepseek-chat
+    litellm_params:
+      model: openai/deepseek-chat
+      api_base: https://api.deepseek.com/v1
+      api_key: os.environ/DEEPSEEK_API_KEY
+      use_chat_completions_api: true
+      timeout: 120
+
+  - model_name: deepseek-v4-flash-direct
+    litellm_params:
+      model: openai/deepseek-chat
+      api_base: https://api.deepseek.com/v1
+      api_key: os.environ/DEEPSEEK_API_KEY
+      use_chat_completions_api: true
+      timeout: 120
+
+  # ══════════════════════════════════════════════════════════════
+  # Google Gemini — via LiteLLM gemini/ (also bridge for /responses)
+  # ══════════════════════════════════════════════════════════════
+
+  - model_name: gemini-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+      use_chat_completions_api: true
+      timeout: 90
+
+  # ══════════════════════════════════════════════════════════════
+  # Anthropic — native Messages API; LiteLLM translates
+  # Still set use_chat_completions_api for Codex /responses clients
+  # that need a stable bridge path through the proxy.
+  # ══════════════════════════════════════════════════════════════
+
+  - model_name: anthropic-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      timeout: 180
+
+# ── Router / fallbacks (optional resilience) ────────────────────
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 2
+  timeout: 180
+  # Uncomment to enable model fallbacks:
+  # fallbacks:
+  #   - nvidia-qwen3-coder: ["nvidia-deepseek-v4-flash", "groq-llama-3.3-70b"]
+  #   - nvidia-llama-3.3-70b: ["together-llama-3.3-70b", "groq-llama-3.3-70b"]
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  request_timeout: 180
+  # Helps Codex-style clients that only speak /v1/responses
+  # (bridge is primarily per-model via use_chat_completions_api)
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # Bind is controlled by docker/CLI (--host 0.0.0.0 --port 4000)

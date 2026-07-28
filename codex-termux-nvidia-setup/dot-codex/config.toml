@@ -1,0 +1,126 @@
+# ~/.codex/config.toml — USER-LEVEL ONLY (Codex ignores model_providers in project configs)
+# Path A default: OpenRouter (Responses API) + BYOK for NVIDIA
+# Path B profiles: LiteLLM remote proxy (Responses → Chat Completions bridge)
+#
+# CRITICAL:
+# - wire_api MUST be "responses" (Codex no longer supports "chat")
+# - Do NOT use reserved provider ids: openai, ollama, lmstudio
+# - Termux: use @mmmbuto/codex-cli-termux (official @openai/codex fails on Bionic)
+#
+# OpenRouter NVIDIA BYOK: https://openrouter.ai/settings/integrations
+# Add your NVIDIA (build.nvidia.com) key so OR routes NVIDIA models via your key.
+
+# ── Defaults (Path A — phone-friendly) ──────────────────────────
+model = "qwen/qwen3-coder"
+model_provider = "openrouter"
+# approval_policy = "on-request"
+# sandbox_mode = "workspace-write"
+
+# ════════════════════════════════════════════════════════════════
+# Providers (custom ids only — never openai / ollama / lmstudio)
+# ════════════════════════════════════════════════════════════════
+
+[model_providers.openrouter]
+name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+env_key = "OPENROUTER_API_KEY"
+wire_api = "responses"
+# Optional attribution headers (OpenRouter recommends these)
+http_headers = { "HTTP-Referer" = "https://github.com/mmmbuto/codex-cli-termux", "X-Title" = "Codex-Termux-NVIDIA" }
+
+# Path B: remote LiteLLM proxy exposing /v1/responses
+# Set LITELLM_BASE_URL e.g. https://vps.example.com:4000/v1
+# Set LITELLM_API_KEY to the proxy master key (same as LITELLM_MASTER_KEY on VPS)
+[model_providers.litellm_proxy]
+name = "LiteLLM Proxy"
+base_url = "http://127.0.0.1:4000/v1"  # litellm-proxy-base — run: codex-use-litellm https://VPS:4000/v1
+env_key = "LITELLM_API_KEY"
+wire_api = "responses"
+# Codex does not read base_url from env; patch with codex-use-litellm or:
+# codex -c 'model_providers.litellm_proxy.base_url="https://VPS:4000/v1"' --profile litellm-qwen-coder
+
+# ════════════════════════════════════════════════════════════════
+# Profiles — Path A (OpenRouter + BYOK NVIDIA / other clouds)
+# Activate: codex --profile nvidia-qwen-coder
+# Termux fork tracks Codex ~0.130 → [profiles.*] in this file is valid.
+# If you upgrade past 0.134, split each profile into ~/.codex/<name>.config.toml
+# ════════════════════════════════════════════════════════════════
+
+[profiles.nvidia-qwen-coder]
+model = "qwen/qwen3-coder"
+model_provider = "openrouter"
+
+[profiles.nvidia-deepseek-flash]
+model = "deepseek/deepseek-v4-flash"
+model_provider = "openrouter"
+
+[profiles.nvidia-nemotron]
+model = "nvidia/nemotron-3-super-120b-a12b"
+model_provider = "openrouter"
+
+[profiles.nvidia-llama70]
+model = "meta-llama/llama-3.3-70b-instruct"
+model_provider = "openrouter"
+
+# Other clouds via OpenRouter slugs (no extra provider block needed)
+[profiles.groq-llama70]
+model = "meta-llama/llama-3.3-70b-instruct"
+model_provider = "openrouter"
+# Prefer Groq route when available; pin with provider preference in OR dashboard if needed
+
+[profiles.together-llama70]
+model = "meta-llama/llama-3.3-70b-instruct"
+model_provider = "openrouter"
+
+[profiles.deepseek-direct-or]
+model = "deepseek/deepseek-v4-flash"
+model_provider = "openrouter"
+
+[profiles.gemini-flash]
+model = "google/gemini-2.5-flash"
+model_provider = "openrouter"
+
+[profiles.anthropic-sonnet]
+model = "anthropic/claude-sonnet-4.5"
+model_provider = "openrouter"
+
+# ════════════════════════════════════════════════════════════════
+# Profiles — Path B (LiteLLM model_name aliases from litellm_config.yaml)
+# Prerequisite: LiteLLM up; LITELLM_API_KEY set; base_url points at VPS
+# ════════════════════════════════════════════════════════════════
+
+[profiles.litellm-qwen-coder]
+model = "nvidia-qwen3-coder"
+model_provider = "litellm_proxy"
+
+[profiles.litellm-deepseek-flash]
+model = "nvidia-deepseek-v4-flash"
+model_provider = "litellm_proxy"
+
+[profiles.litellm-nemotron]
+model = "nvidia-nemotron-3-super"
+model_provider = "litellm_proxy"
+
+[profiles.litellm-llama70]
+model = "nvidia-llama-3.3-70b"
+model_provider = "litellm_proxy"
+
+[profiles.litellm-groq]
+model = "groq-llama-3.3-70b"
+model_provider = "litellm_proxy"
+
+[profiles.litellm-together]
+model = "together-llama-3.3-70b"
+model_provider = "litellm_proxy"
+
+[profiles.litellm-deepseek]
+model = "deepseek-chat"
+model_provider = "litellm_proxy"
+
+[profiles.litellm-gemini]
+model = "gemini-flash"
+model_provider = "litellm_proxy"
+
+[profiles.litellm-anthropic]
+model = "anthropic-sonnet"
+model_provider = "litellm_proxy"

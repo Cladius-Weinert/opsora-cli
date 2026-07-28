@@ -11,6 +11,8 @@ Paket ini menginstal **Qwen Code CLI** di HP Android (Termux) dengan konfigurasi
 
 > **Penting:** Paket resmi `@qwen-code/qwen-code` gagal di Termux. Wajib pakai fork: `@mmmbuto/qwen-code-termux`.
 
+> **Konteks lengkap Opsora:** Baca [`OPSORA_MEMORY_KONTEKS.md`](./OPSORA_MEMORY_KONTEKS.md) — memory file audit 2 hari terakhir (repos, credentials, MCP, skills, arsitektur, GitHub activity).
+
 ## Model Profiles (terverifikasi 2026-07-28)
 
 | Profile | Model | Provider | Context | Fitur |

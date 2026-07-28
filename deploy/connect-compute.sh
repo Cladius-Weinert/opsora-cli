@@ -92,18 +92,33 @@ registry["reachable"].append({
     "note": "Login SSO required; connect AWS GPU cluster from UI",
 })
 
-# AWS fleet (SSH probe only)
-fleet = [
-    {"id": "aop-vps", "host": "54.81.31.132", "role": "orchestrator", "ports": [22, 8787]},
-    {"id": "opsora-model", "host": "18.208.28.108", "role": "ai-worker", "ports": [22, 8788]},
-    {"id": "opsora-brain", "host": "98.94.100.100", "role": "command-center", "ports": [22, 4000, 11434]},
-    {"id": "cloudpc-win", "host": "32.198.252.187", "role": "rdp-gui", "ports": [22, 3389]},
-]
-for node in fleet:
-    ssh = port_open(node["host"], 22)
-    services = {str(p): port_open(node["host"], p) for p in node["ports"] if p != 22}
-    entry = {**node, "ssh_open": ssh, "services": services, "status": "reachable" if ssh else "unreachable"}
-    (registry["reachable"] if ssh else registry["blocked"]).append(entry)
+# AWS fleet (SSH probe only — skip when OPSORA_SKIP_FLEET=1)
+if os.environ.get("OPSORA_SKIP_FLEET", "") not in ("1", "true", "yes"):
+    fleet = [
+        {"id": "aop-vps", "host": "54.81.31.132", "role": "orchestrator", "ports": [22, 8787]},
+        {"id": "opsora-model", "host": "18.208.28.108", "role": "ai-worker", "ports": [22, 8788]},
+        {"id": "opsora-brain", "host": "98.94.100.100", "role": "command-center", "ports": [22, 4000, 11434]},
+        {"id": "cloudpc-win", "host": "32.198.252.187", "role": "rdp-gui", "ports": [22, 3389]},
+    ]
+    for node in fleet:
+        ssh = port_open(node["host"], 22)
+        services = {str(p): port_open(node["host"], p) for p in node["ports"] if p != 22}
+        entry = {**node, "ssh_open": ssh, "services": services, "status": "reachable" if ssh else "unreachable"}
+        (registry["reachable"] if ssh else registry["blocked"]).append(entry)
+else:
+    registry["reachable"].append({
+        "id": "render-gateway",
+        "type": "paas",
+        "url": "https://opsora-gateway.onrender.com",
+        "status": "deploy-via-blueprint",
+        "note": "See render.yaml — no AWS SSH required",
+    })
+    registry["blocked"].append({
+        "id": "aws-fleet",
+        "type": "ec2-fleet",
+        "status": "skipped",
+        "note": "OPSORA_SKIP_FLEET=1 — use NVIDIA + Render instead",
+    })
 
 # Local gateway
 registry["connected"].append({

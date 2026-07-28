@@ -98,7 +98,23 @@ bash deploy/deploy-all.sh
 
 ---
 
-## 4. Agar Cloud Agent bisa deploy AWS langsung
+## 5. NVIDIA Cloud only (tanpa AWS) — **pakai ini kalau fleet macet**
+
+```bash
+export NVIDIA_API_KEY=nvapi-...
+bash deploy/nvidia-cloud-only.sh
+```
+
+Deploy publik ke **Render** (console lain, gratis):
+1. https://dashboard.render.com → **New** → **Blueprint**
+2. Repo `Cladius-Weinert/opsora-cli` branch `cursor/nvidia-cloud-stack-c133`
+3. Set `NVIDIA_API_KEY` → dapat URL `https://opsora-gateway.onrender.com/v1`
+
+Detail: [`deploy/nvidia-cloud/README.md`](nvidia-cloud/README.md)
+
+---
+
+## 6. Agar Cloud Agent bisa deploy AWS langsung
 
 Tambahkan secrets di Cursor Cloud Agent environment:
 

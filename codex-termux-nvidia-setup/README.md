@@ -28,13 +28,25 @@ Codex **hanya** berbicara **Responses API** (`wire_api = "responses"`). NVIDIA N
 | `nvidia-llama70` | `meta-llama/llama-3.3-70b-instruct` | General power |
 | `groq-fast` / `together` / `deepseek` / `gemini` / `anthropic` | sesuai cloud | Path A via OpenRouter; Path B via LiteLLM |
 
+## Prasyarat
+
+1. **Termux** dari [F-Droid](https://f-droid.org/en/packages/com.termux/) atau [GitHub releases](https://github.com/termux/termux-app/releases) (bukan Play Store — versi lama).
+2. **Termux:API** (opsional, untuk login browser): install app + `pkg install termux-api`.
+3. **API key NVIDIA**: [build.nvidia.com/settings/api-keys](https://build.nvidia.com/settings/api-keys) → format `nvapi-...`.
+4. **API key OpenRouter** (Path A): [openrouter.ai/keys](https://openrouter.ai/keys).
+
 ## Install cepat (Path A — HP)
 
 ```bash
 # Di Termux:
 pkg update && pkg upgrade -y
+pkg install -y git curl jq nodejs-lts
+
+# Satu baris (script otomatis unduh config dari GitHub):
 curl -fsSL https://raw.githubusercontent.com/Cladius-Weinert/opsora-cli/main/codex-termux-nvidia-setup/termux-install.sh | bash
+
 # atau dari clone lokal:
+git clone --depth 1 https://github.com/Cladius-Weinert/opsora-cli.git ~/opsora-cli
 bash ~/opsora-cli/codex-termux-nvidia-setup/termux-install.sh
 
 # Isi kunci API

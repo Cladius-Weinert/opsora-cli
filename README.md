@@ -83,6 +83,19 @@ opsora-gateway && opsora-model power && opsora-claude
 
 See [`claude-code-termux/README.md`](claude-code-termux/README.md) for model profiles (`power`, `coder`, `reasoning`, `nemotron`, etc.).
 
+### OpenAI Codex CLI + NVIDIA (Termux / Android)
+
+Run **Codex CLI** on your phone with **NVIDIA** and other cloud models (OpenRouter BYOK or LiteLLM proxy):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Cladius-Weinert/opsora-cli/main/codex-termux-nvidia-setup/termux-install.sh | bash
+nano ~/.codex/.env   # OPENROUTER_API_KEY + NVIDIA_API_KEY (BYOK)
+source ~/.bashrc
+cd ~/projects && codex --profile nvidia-qwen-coder
+```
+
+See [`codex-termux-nvidia-setup/README.md`](codex-termux-nvidia-setup/README.md) for profiles, VPS LiteLLM, and troubleshooting.
+
 ### From Source
 
 ```bash

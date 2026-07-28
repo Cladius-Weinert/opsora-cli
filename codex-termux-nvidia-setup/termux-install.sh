@@ -41,6 +41,36 @@ SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 PROJECTS_DIR="${PROJECTS_DIR:-$HOME/projects}"
 BIN_DIR="$HOME/.local/bin"
+SETUP_DIR="${CODEX_SETUP_DIR:-$HOME/.local/share/codex-termux-nvidia-setup}"
+REPO_RAW="${CODEX_SETUP_REPO:-https://raw.githubusercontent.com/Cladius-Weinert/opsora-cli/main/codex-termux-nvidia-setup}"
+
+# When installed via `curl ... | bash`, companion files are not beside the script.
+ensure_setup_files() {
+  local cfg="$SRC_DIR/dot-codex/config.toml"
+  if [[ -f "$cfg" ]]; then
+  return 0
+  fi
+  info "Mengunduh file konfigurasi dari GitHub..."
+  mkdir -p "$SETUP_DIR/dot-codex"
+  local files=(
+    "dot-codex/config.toml"
+    "dot-codex/env.example"
+    "smoke-test.sh"
+    "TROUBLESHOOTING.md"
+    "README.md"
+  )
+  local f url
+  for f in "${files[@]}"; do
+    url="$REPO_RAW/$f"
+    if curl -fsSL "$url" -o "$SETUP_DIR/$f"; then
+      ok "  $f"
+    else
+      warn "  gagal unduh $f"
+    fi
+  done
+  SRC_DIR="$SETUP_DIR"
+}
+ensure_setup_files
 
 # ── Packages ────────────────────────────────────────────────────
 info "Updating packages..."
@@ -180,11 +210,11 @@ else
 fi
 if [[ -f "$CFGF" ]]; then
   # Patch only the litellm_proxy provider base_url (Codex reads TOML, not env for base_url)
-  python3 - "$CFGF" "$BASE" <<'PY' 2>/dev/null || sed -i "s|^base_url = \".*\"  *# litellm-proxy-base|base_url = \"$BASE\"  # litellm-proxy-base|" "$CFGF"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$CFGF" "$BASE" <<'PY'
 import re, sys
 path, base = sys.argv[1], sys.argv[2]
 text = open(path, encoding="utf-8").read()
-# Replace base_url inside [model_providers.litellm_proxy] section only
 pat = re.compile(
     r"(?ms)(\[model_providers\.litellm_proxy\][^\[]*?)(base_url\s*=\s*\")([^\"]*)(\")"
 )
@@ -194,6 +224,9 @@ if n != 1:
 open(path, "w", encoding="utf-8").write(new)
 print("patched config.toml litellm_proxy.base_url")
 PY
+  else
+    sed -i "s|^base_url = \".*\"  *# litellm-proxy-base|base_url = \"$BASE\"  # litellm-proxy-base|" "$CFGF"
+  fi
 fi
 echo "[OK] LITELLM_BASE_URL=$BASE"
 echo "     Run: source ~/.codex/.env && codex --profile litellm-qwen-coder"

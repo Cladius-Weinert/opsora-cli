@@ -80,6 +80,21 @@ curl -fsSL https://raw.githubusercontent.com/Cladius-Weinert/opsora-cli/main/qwe
 | `qw-fast` | Fast model + start |
 | `qw-reason` | Reasoning model + start |
 | `qw-nvidia` | NVIDIA coder + start |
+| `opsora-audit` | Audit secret/repos/health + export konteks |
+| `qw-audit` | Shortcut: `opsora-audit all` |
+
+## Skill Opsora Audit
+
+Script + skill untuk mempermudah onboarding Qwen Code:
+
+```bash
+opsora-audit all          # audit lengkap (secret masked, repos, health)
+opsora-audit export       # buat context-bundle.md untuk di-load Qwen
+opsora-audit reveal --yes-i-understand  # nilai penuh → file lokal privat saja
+```
+
+- **Agent:** `agents/opsora-audit.md` → copy ke `~/.qwen/agents/`
+- **Skill doc:** `skills/opsora-audit/SKILL.md`
 
 ## API Keys
 

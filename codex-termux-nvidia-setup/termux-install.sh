@@ -95,7 +95,7 @@ ok "codex $(codex --version 2>/dev/null || echo 'installed')"
 
 # ── Install config.toml (user-level ONLY) ───────────────────────
 CFG_SRC="$SRC_DIR/dot-codex/config.toml"
-ENV_SRC="$SRC_DIR/dot-codex/.env.example"
+ENV_SRC="$SRC_DIR/dot-codex/env.example"
 
 if [[ -f "$CFG_SRC" ]]; then
   if [[ -f "$CODEX_HOME/config.toml" ]]; then

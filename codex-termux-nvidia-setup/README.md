@@ -70,7 +70,7 @@ docker compose -f litellm-docker-compose.yml up -d
 |------|--------|
 | `termux-install.sh` | Bootstrap Termux lengkap |
 | `dot-codex/config.toml` | → salin ke `~/.codex/config.toml` |
-| `dot-codex/.env.example` | Template API keys |
+| `dot-codex/env.example` | Template API keys → `~/.codex/.env` |
 | `litellm_config.yaml` | Proxy multi-cloud (Path B) |
 | `litellm-docker-compose.yml` | Docker Compose VPS |
 | `smoke-test.sh` | Uji curl OpenRouter / LiteLLM / NVIDIA |

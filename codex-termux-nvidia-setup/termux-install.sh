@@ -37,7 +37,13 @@ if [[ -d /data/data/com.termux/files/home ]]; then
   export HOME
 fi
 
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# curl | bash: BASH_SOURCE is empty and set -u would abort — resolve SRC_DIR safely.
+SCRIPT_SELF="${BASH_SOURCE[0]:-}"
+if [[ -n "$SCRIPT_SELF" && -f "$SCRIPT_SELF" ]]; then
+  SRC_DIR="$(cd "$(dirname "$SCRIPT_SELF")" && pwd)"
+else
+  SRC_DIR="${CODEX_SETUP_DIR:-$HOME/.local/share/codex-termux-nvidia-setup}"
+fi
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 PROJECTS_DIR="${PROJECTS_DIR:-$HOME/projects}"
 BIN_DIR="$HOME/.local/bin"
@@ -48,7 +54,7 @@ REPO_RAW="${CODEX_SETUP_REPO:-https://raw.githubusercontent.com/Cladius-Weinert/
 ensure_setup_files() {
   local cfg="$SRC_DIR/dot-codex/config.toml"
   if [[ -f "$cfg" ]]; then
-  return 0
+    return 0
   fi
   info "Mengunduh file konfigurasi dari GitHub..."
   mkdir -p "$SETUP_DIR/dot-codex"

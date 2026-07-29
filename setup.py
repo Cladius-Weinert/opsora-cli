@@ -14,7 +14,7 @@ if readme_path.is_file():
 
 setup(
     name="opsora-cli",
-    version="2.0.0",
+    version="2.1.0",
     description="Multi-provider AI coding assistant with a Codex/Cursor-style terminal UI",
     long_description=long_description,
     long_description_content_type="text/markdown",

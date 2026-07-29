@@ -1,0 +1,21 @@
+# Opsora AI Gateway — NVIDIA-backed LiteLLM on Render (no AWS required)
+# Deploy: https://dashboard.render.com/select-repo?type=blueprint
+# Or: New > Blueprint > connect github.com/Cladius-Weinert/opsora-cli
+
+services:
+  - type: web
+    name: opsora-gateway
+    runtime: python
+    plan: free
+    region: singapore
+    branch: cursor/nvidia-cloud-stack-c133
+    buildCommand: pip install -r deploy/requirements-gateway.txt
+    startCommand: bash deploy/render/start.sh
+    healthCheckPath: /health/liveliness
+    envVars:
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: LITELLM_MASTER_KEY
+        generateValue: true
+      - key: NGC_ORG_ID
+        value: "1006275399815502"

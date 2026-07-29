@@ -128,6 +128,15 @@ TOKENHUB_API_KEY = os.environ.get("TOKENHUB_API_KEY", "")
 TOKENHUB_URL = "https://tokenhub.tencentmaas.com/v1"
 tokenhub_client = OpenAI(api_key=TOKENHUB_API_KEY, base_url=TOKENHUB_URL, timeout=40) if TOKENHUB_API_KEY else None
 
+# 8. Opsora Agent API (self-hosted gateway — routes through opsora-agent-api server)
+OPSORA_API_URL = os.environ.get("OPSORA_API_URL", "")
+OPSORA_API_TOKEN = os.environ.get("OPSORA_API_TOKEN", "")
+opsora_api_client = OpenAI(
+    api_key=OPSORA_API_TOKEN,
+    base_url=f"{OPSORA_API_URL}/v1" if OPSORA_API_URL else "",
+    timeout=120,
+) if OPSORA_API_URL and OPSORA_API_TOKEN else None
+
 # TokenHub models (all available in Singapore region)
 TOKENHUB_MODELS = {
     "active": [
@@ -166,6 +175,7 @@ PROVIDER_MODELS = {
     "openai": "gpt-4o,gpt-4o-mini,gpt-3.5-turbo",
     "bedrock": "amazon.nova-pro-v1:0,amazon.nova-lite-v1:0,amazon.nova-micro-v1:0",
     "tokenhub": ",".join(TOKENHUB_MODELS["active"] + TOKENHUB_MODELS["available"]),
+    "opsora_api": "opsora-fast,opsora-brain,opsora-code,opsora-reason,opsora-max,opsora-agent",
     "local": "qwen3.5:4b,llama3.1:latest,qwen2.5-coder:32b",
 }
 
@@ -279,6 +289,8 @@ def is_provider_available(provider: str) -> bool:
         return bedrock_available()
     if provider == "tokenhub":
         return tokenhub_client is not None
+    if provider == "opsora_api":
+        return opsora_api_client is not None
     if provider == "local":
         return check_ollama_running()
     return False
@@ -374,6 +386,68 @@ SAFE_TOOLS = [
             "parameters": {"type": "object", "properties": {"arguments": {"type": "string"}}, "required": ["arguments"]},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep_search",
+            "description": "Search file contents using regex patterns (like ripgrep). Returns matching lines with file paths and line numbers. Use for finding code patterns, function definitions, error messages, or any text in the codebase.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Regex pattern to search for"},
+                    "path": {"type": "string", "description": "Directory or file to search in (default: workspace root)"},
+                    "file_type": {"type": "string", "description": "File extension filter (e.g. 'py', 'js', 'ts')"},
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "glob_search",
+            "description": "Find files matching a glob pattern. Returns list of file paths sorted by modification time. Use for discovering project structure, finding specific file types, or locating configuration files.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Glob pattern (e.g. '**/*.py', 'src/**/*.ts', 'package.json')"},
+                    "base": {"type": "string", "description": "Base directory (default: workspace root)"},
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_file",
+            "description": "Edit a file by replacing an exact text match. Provide the old text to find and the new text to replace it with. Only replaces the first occurrence. Use for precise code modifications without rewriting entire files.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filepath": {"type": "string", "description": "Path to the file to edit"},
+                    "old_string": {"type": "string", "description": "Exact text to find (must match precisely including whitespace and indentation)"},
+                    "new_string": {"type": "string", "description": "Text to replace it with"},
+                },
+                "required": ["filepath", "old_string", "new_string"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "Fetch content from a URL. Returns the page text with HTML tags stripped (truncated to 50KB). Use for reading documentation, API responses, or any web resource.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to fetch (must start with http:// or https://)"},
+                    "max_chars": {"type": "integer", "description": "Maximum characters to return (default: 50000)"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
 ]
 
 def execute_tool(name: str, args: dict[str, Any]) -> str:
@@ -443,6 +517,79 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
                 capture_output=True, text=True, timeout=60
             )
             return ((result.stdout or "") + (result.stderr or ""))[:50000]
+
+        # Content search (grep-based, works without ripgrep)
+        if name == "grep_search":
+            pattern = args["pattern"]
+            search_path = args.get("path", ".")
+            if not Path(search_path).is_absolute():
+                search_path = str(WORKSPACE_ROOT / search_path)
+            file_type = args.get("file_type", "")
+            # Build grep command
+            cmd = ["grep", "-rn", "--color=never"]
+            if file_type:
+                cmd.extend([f"--include=*.{file_type}"])
+            cmd.extend([pattern, search_path])
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            output = result.stdout
+            if not output:
+                return f"No matches found for '{pattern}' in {search_path}"
+            lines = output.strip().split("\n")
+            if len(lines) > 200:
+                output = "\n".join(lines[:200]) + f"\n… truncated ({len(lines)} total matches)"
+            return output[:50000]
+
+        # File pattern matching
+        if name == "glob_search":
+            import glob as glob_mod
+            base = args.get("base", ".")
+            if not Path(base).is_absolute():
+                base = str(WORKSPACE_ROOT / base)
+            full_pattern = os.path.join(base, args["pattern"])
+            matches = sorted(glob_mod.glob(full_pattern, recursive=True))[:100]
+            # Filter to files only
+            files = [str(Path(m).relative_to(WORKSPACE_ROOT)) for m in matches if os.path.isfile(m)]
+            if not files:
+                return f"No files matching '{args['pattern']}' in {base}"
+            return json.dumps(files, indent=2)
+
+        # Surgical file editing
+        if name == "edit_file":
+            filepath = Path(args["filepath"])
+            if not filepath.is_absolute():
+                filepath = WORKSPACE_ROOT / filepath
+            if not filepath.exists():
+                return f"ERROR: File not found: {filepath}"
+            content = filepath.read_text(encoding="utf-8")
+            old_str = args["old_string"]
+            new_str = args["new_string"]
+            if old_str not in content:
+                return f"ERROR: old_string not found in {filepath}. Check whitespace and exact match."
+            count = content.count(old_str)
+            new_content = content.replace(old_str, new_str, 1)
+            filepath.write_text(new_content, encoding="utf-8")
+            note = f" (note: {count} occurrences exist, replaced first only)" if count > 1 else ""
+            return f"✓ Edited {filepath}: replaced 1 occurrence ({len(old_str)} → {len(new_str)} chars){note}"
+
+        # URL content retrieval
+        if name == "web_fetch":
+            import re as re_mod
+            url = args["url"]
+            if not url.startswith(("http://", "https://")):
+                return "ERROR: URL must start with http:// or https://"
+            max_chars = int(args.get("max_chars", 50000))
+            req = Request(url, headers={"User-Agent": "Opsora/2.0 Agent"})
+            try:
+                with urlopen(req, timeout=15) as resp:
+                    raw = resp.read(max_chars * 2).decode("utf-8", errors="replace")
+            except Exception as e:
+                return f"ERROR: Failed to fetch {url}: {type(e).__name__}: {e}"
+            # Strip HTML tags for cleaner text output
+            clean = re_mod.sub(r"<script[^>]*>.*?</script>", "", raw, flags=re_mod.DOTALL)
+            clean = re_mod.sub(r"<style[^>]*>.*?</style>", "", clean, flags=re_mod.DOTALL)
+            clean = re_mod.sub(r"<[^>]+>", " ", clean)
+            clean = re_mod.sub(r"\s+", " ", clean).strip()
+            return clean[:max_chars]
 
         return f"Unknown tool: {name}"
 
@@ -523,6 +670,13 @@ def invoke_provider(provider: str, model: str, messages: list[dict], use_tools: 
             kwargs["tool_choice"] = "auto"
         return tokenhub_client.chat.completions.create(**kwargs)
 
+    if provider == "opsora_api" and opsora_api_client:
+        kwargs = {"model": model, "messages": messages, "temperature": 0.2, "max_tokens": 8192}
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+        return opsora_api_client.chat.completions.create(**kwargs)
+
     raise RuntimeError(f"Provider '{provider}' is not available")
 
 def invoke_bedrock(model: str, messages: list[dict]) -> Any:
@@ -589,7 +743,7 @@ def build_header() -> Panel:
     sys_info = get_system_info()
     providers_status = []
 
-    for prov in ["nvidia", "alibaba", "model_studio", "openai", "bedrock", "tokenhub", "local"]:
+    for prov in ["nvidia", "alibaba", "model_studio", "openai", "bedrock", "tokenhub", "opsora_api", "local"]:
         status = "●" if is_provider_available(prov) else "○"
         color = "green" if is_provider_available(prov) else "red"
         providers_status.append(f"[{color}]{status}[/{color}] {prov}")
@@ -658,8 +812,12 @@ def show_tools_status() -> None:
         ("workspace_status", "Safe", "✓", "Show workspace status"),
         ("read_file", "Host", "✓", "Read local files"),
         ("write_file", "Host", "✓", "Write local files"),
+        ("edit_file", "Host", "✓", "Surgical file editing (find & replace)"),
         ("run_command", "Host", "✓", "Execute shell commands"),
         ("aws_command", "AWS", "✓", "Read-only AWS CLI"),
+        ("grep_search", "Search", "✓", "Search file contents (regex)"),
+        ("glob_search", "Search", "✓", "Find files by pattern"),
+        ("web_fetch", "Web", "✓", "Fetch URL content"),
     ]
 
     for name, tool_type, status, desc in tools_info:
@@ -682,6 +840,7 @@ def show_models_table() -> None:
         "openai": ("gpt-4o, gpt-4o-mini", OPENAI_API_KEY),
         "bedrock": ("amazon.nova-pro-v1:0", "AWS Credentials"),
         "tokenhub": (", ".join(TOKENHUB_MODELS["active"]), TOKENHUB_API_KEY),
+        "opsora_api": ("opsora-fast, opsora-agent, opsora-max", OPSORA_API_TOKEN),
         "local": ("qwen3.5:4b, llama3.1:latest", "Ollama Local"),
     }
 
@@ -854,7 +1013,7 @@ def handle_command(value: str, history: list[dict]) -> tuple[bool, Optional[Sele
 
 def run_turn(history: list[dict], current_selection: Selection) -> tuple[list[dict], Selection]:
     """Run a single conversation turn with tool calling"""
-    MAX_TOOL_ROUNDS = 5
+    MAX_TOOL_ROUNDS = 10
 
     for round_idx in range(MAX_TOOL_ROUNDS):
         messages = [{"role": "system", "content": SYSTEM_PROMPT}, *history]

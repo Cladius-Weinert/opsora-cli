@@ -1,130 +1,155 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Opsora — Claude Code + NVIDIA models untuk Termux (Android)
-# Install: curl -fsSL .../install-termux.sh | bash
+# Full Opsora Claude Code setup for Termux — run once, then: opsora-claude
 set -euo pipefail
 
-CYAN='\033[0;36m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BOLD='\033[1m'
-NC='\033[0m'
-
+CYAN='\033[0;36m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
 info()  { echo -e "${CYAN}[INFO]${NC} $*"; }
 ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 
-echo -e "${BOLD}${CYAN}"
-echo '  ╔══════════════════════════════════════════════╗'
-echo '  ║  OPSORA — Claude Code + NVIDIA (Termux)      ║'
-echo '  ║  Full-power models via LiteLLM gateway       ║'
-echo '  ╚══════════════════════════════════════════════╝'
-echo -e "${NC}"
-
-# ── Termux packages ─────────────────────────────────────────────
-info "Updating Termux packages..."
-pkg update -y
-pkg install -y python git curl wget jq openssh
-
-# Node.js untuk Claude Code (LTS jika tersedia)
-if ! command -v node >/dev/null 2>&1; then
-  pkg install -y nodejs-lts || pkg install -y nodejs
-fi
-ok "Node $(node -v 2>/dev/null || echo '?') / Python $(python3 -V)"
-
-# ── Install dirs ────────────────────────────────────────────────
-INSTALL_DIR="${OPSORA_CLAUDE_DIR:-$HOME/.opsora/claude-code}"
+REPO_URL="${OPSORA_REPO_URL:-https://github.com/Cladius-Weinert/opsora-cli.git}"
 REPO_DIR="${OPSORA_REPO_DIR:-$HOME/opsora-cli}"
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="${OPSORA_CLAUDE_DIR:-$HOME/.opsora/claude-code}"
+BIN_DIR="$HOME/.local/bin"
+NPM_PREFIX="${NPM_CONFIG_PREFIX:-$HOME/.npm-global}"
+NODE="${TERMUX_NODE:-$PREFIX/bin/node}"
+CLAUDE_VERSION="${CLAUDE_CODE_VERSION:-2.1.112}"
+NODE_MARKER="${INSTALL_DIR}/.node-version"
 
-mkdir -p "$INSTALL_DIR"
-mkdir -p "$HOME/.claude"
-mkdir -p "$HOME/.local/bin"
+echo -e "${BOLD}${CYAN}Opsora Claude Code — Termux installer${NC}"
 
-# ── Clone opsora-cli jika belum ada ─────────────────────────────
+# ── Packages ────────────────────────────────────────────────────
+info "Installing Termux packages..."
+pkg update -y >/dev/null
+
+BASE_PKGS="python git curl jq"
+if command -v node >/dev/null 2>&1; then
+  ok "Node sudah terpasang ($(node -v)) — skip nodejs-lts"
+  pkg install -y $BASE_PKGS
+else
+  info "Node belum ada — install nodejs-lts..."
+  pkg install -y $BASE_PKGS nodejs-lts 2>/dev/null || pkg install -y $BASE_PKGS nodejs
+fi
+
+mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$NPM_PREFIX/bin" "$HOME/.claude"
+
+# ── Repo ────────────────────────────────────────────────────────
 if [[ ! -d "$REPO_DIR/.git" ]]; then
   info "Cloning opsora-cli..."
-  git clone --depth 1 https://github.com/Cladius-Weinert/opsora-cli.git "$REPO_DIR" 2>/dev/null \
-    || git clone --depth 1 https://github.com/opsora/opsora-cli.git "$REPO_DIR"
+  git clone --depth 1 "$REPO_URL" "$REPO_DIR"
+else
+  info "Updating opsora-cli..."
+  git -C "$REPO_DIR" pull --ff-only 2>/dev/null || true
 fi
 
-# Copy config files
-info "Installing configs ke $INSTALL_DIR..."
-cp -f "$REPO_DIR/claude-code-termux/litellm-config.yaml" "$INSTALL_DIR/"
-cp -f "$REPO_DIR/claude-code-termux/models.json" "$INSTALL_DIR/"
-cp -f "$REPO_DIR/claude-code-termux/settings.json" "$INSTALL_DIR/"
-cp -f "$REPO_DIR/claude-code-termux/"*.sh "$INSTALL_DIR/"
+SRC="$REPO_DIR/claude-code-termux"
+cp -f "$SRC/nvidia-proxy.py" "$SRC/settings.json" "$SRC/models.json" "$SRC/"*.sh "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/"*.sh
 
 if [[ ! -f "$INSTALL_DIR/secrets.env" ]]; then
-  cp "$REPO_DIR/claude-code-termux/secrets.env.example" "$INSTALL_DIR/secrets.env"
+  cp "$SRC/secrets.env.example" "$INSTALL_DIR/secrets.env"
+fi
+if [[ -n "${NVIDIA_API_KEY:-}" ]]; then
+  if grep -q '^export NVIDIA_API_KEY=' "$INSTALL_DIR/secrets.env"; then
+    sed -i "s|^export NVIDIA_API_KEY=.*|export NVIDIA_API_KEY=${NVIDIA_API_KEY}|" "$INSTALL_DIR/secrets.env"
+  else
+    echo "export NVIDIA_API_KEY=${NVIDIA_API_KEY}" >>"$INSTALL_DIR/secrets.env"
+  fi
+  ok "NVIDIA_API_KEY disimpan ke secrets.env"
+elif ! grep -q 'nvapi-' "$INSTALL_DIR/secrets.env" 2>/dev/null; then
   warn "Edit API key: nano $INSTALL_DIR/secrets.env"
 fi
 
-# ── Python: LiteLLM gateway ─────────────────────────────────────
-info "Installing LiteLLM..."
-pip install --upgrade pip
-pip install 'litellm[proxy]' httpx
+# ── npm global ────────────────────────────────────────────────────
+grep -q 'npm-global' "$HOME/.bashrc" 2>/dev/null || {
+  echo 'export NPM_CONFIG_PREFIX="$HOME/.npm-global"' >>"$HOME/.bashrc"
+  echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >>"$HOME/.bashrc"
+}
+export NPM_CONFIG_PREFIX="$NPM_PREFIX"
+export PATH="$NPM_PREFIX/bin:$PATH"
 
-# ── Claude Code CLI ─────────────────────────────────────────────
-if ! command -v claude >/dev/null 2>&1; then
-  info "Installing Claude Code..."
-  npm install -g @anthropic-ai/claude-code 2>/dev/null \
-    || curl -fsSL https://claude.ai/install.sh | bash 2>/dev/null \
-    || warn "Install Claude Code manual: npm i -g @anthropic-ai/claude-code"
+resolve_claude_cli() {
+  local c
+  for c in \
+    "$NPM_PREFIX/lib/node_modules/@anthropic-ai/claude-code/cli.js" \
+    "$(npm root -g 2>/dev/null)/@anthropic-ai/claude-code/cli.js"; do
+    [[ -f "$c" ]] && echo "$c" && return 0
+  done
+  return 1
+}
+
+CURRENT_NODE_VER="$(node -v 2>/dev/null || echo "none")"
+PREV_NODE_VER="$(cat "$NODE_MARKER" 2>/dev/null || echo "")"
+FORCE_NPM_REINSTALL=false
+if [[ -n "$PREV_NODE_VER" && "$PREV_NODE_VER" != "$CURRENT_NODE_VER" ]]; then
+  FORCE_NPM_REINSTALL=true
+  warn "Node berubah ($PREV_NODE_VER → $CURRENT_NODE_VER) — reinstall Claude Code"
 fi
+echo "$CURRENT_NODE_VER" >"$NODE_MARKER"
 
-# ── Claude settings.json ────────────────────────────────────────
-if [[ ! -f "$HOME/.claude/settings.json" ]]; then
-  cp "$INSTALL_DIR/settings.json" "$HOME/.claude/settings.json"
-  ok "Created ~/.claude/settings.json"
+info "Installing Claude Code @${CLAUDE_VERSION}..."
+if $FORCE_NPM_REINSTALL; then
+  npm install -g "@anthropic-ai/claude-code@${CLAUDE_VERSION}"
 else
-  warn "~/.claude/settings.json sudah ada — merge manual atau backup dulu"
+  npm install -g "@anthropic-ai/claude-code@${CLAUDE_VERSION}" 2>/dev/null || true
+fi
+CLAUDE_CLI="$(resolve_claude_cli)" || {
+  echo "❌ Claude Code gagal install. Coba: npm install -g @anthropic-ai/claude-code@${CLAUDE_VERSION}"
+  exit 1
+}
+
+# Fix shebang (single quotes — avoid bash ! expansion)
+if head -1 "$CLAUDE_CLI" | grep -q '/usr/bin/env node'; then
+  sed -i '1s|#!/usr/bin/env node|#!'"$PREFIX"'/bin/node|' "$CLAUDE_CLI"
+  ok "Shebang cli.js diperbaiki"
 fi
 
-# ── Shell helpers ───────────────────────────────────────────────
-BIN_DIR="$HOME/.local/bin"
+# ── Apply gateway settings (force overwrite) ────────────────────
+bash "$INSTALL_DIR/apply-settings.sh"
+
+# ── Restart proxy after update ──────────────────────────────────
+bash "$INSTALL_DIR/stop-gateway.sh" 2>/dev/null || true
+
+# ── Shell wrappers ──────────────────────────────────────────────
 cat >"$BIN_DIR/opsora-gateway" <<'WRAP'
 #!/data/data/com.termux/files/usr/bin/bash
 exec "$HOME/.opsora/claude-code/start-gateway.sh" "$@"
 WRAP
+
 cat >"$BIN_DIR/opsora-model" <<'WRAP'
 #!/data/data/com.termux/files/usr/bin/bash
 exec "$HOME/.opsora/claude-code/switch-model.sh" "$@"
 WRAP
-cat >"$BIN_DIR/opsora-claude" <<'WRAP'
-#!/data/data/com.termux/files/usr/bin/bash
-INSTALL_DIR="${OPSORA_CLAUDE_DIR:-$HOME/.opsora/claude-code}"
-[[ -f "$INSTALL_DIR/secrets.env" ]] && source "$INSTALL_DIR/secrets.env"
-"$INSTALL_DIR/start-gateway.sh" 2>/dev/null || true
-exec claude "$@"
-WRAP
+
+cp -f "$SRC/opsora-claude.sh" "$BIN_DIR/opsora-claude"
 chmod +x "$BIN_DIR/opsora-gateway" "$BIN_DIR/opsora-model" "$BIN_DIR/opsora-claude"
 
-# PATH
-if ! grep -q '.local/bin' "$HOME/.bashrc" 2>/dev/null; then
-  echo 'export PATH="$HOME/.local/bin:$PATH"' >>"$HOME/.bashrc"
-fi
+grep -q '.local/bin' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >>"$HOME/.bashrc"
 export PATH="$HOME/.local/bin:$PATH"
 
-# ── Done ──────────────────────────────────────────────────────
+# ── Verify ──────────────────────────────────────────────────────
+echo ""
+info "Verifying gateway..."
+if [[ -f "$INSTALL_DIR/secrets.env" ]] && grep -q 'nvapi-' "$INSTALL_DIR/secrets.env"; then
+  if bash "$INSTALL_DIR/test-gateway.sh" opsora-balanced 2>&1 | tee /tmp/opsora-gateway-test.log | grep -q '"text"\|event:'; then
+    ok "Gateway + NVIDIA model OK (opsora-balanced)"
+  else
+    warn "Gateway test gagal:"
+    tail -15 /tmp/opsora-gateway-test.log 2>/dev/null || true
+    warn "Cek log: tail -20 $INSTALL_DIR/gateway.log"
+  fi
+else
+  warn "NVIDIA_API_KEY belum diisi di $INSTALL_DIR/secrets.env"
+fi
+
 echo ""
 ok "Install selesai!"
 echo ""
-echo "Langkah berikutnya:"
-echo "  1. Isi NVIDIA API key:"
-echo "     nano $INSTALL_DIR/secrets.env"
+echo "  1. Isi API key (jika belum):  nano $INSTALL_DIR/secrets.env"
+echo "  2. Jalankan Claude Code:      opsora-claude"
+echo "  3. Di dalam Claude, cek:      /status"
+echo "     → harus ada 'Anthropic base URL: http://127.0.0.1:4000'"
+echo "     → Auth token: ANTHROPIC_AUTH_TOKEN"
+echo "  4. Pilih model:               /model → opsora-balanced"
 echo ""
-echo "  2. Start gateway:"
-echo "     opsora-gateway"
-echo ""
-echo "  3. Pilih model (opsional):"
-echo "     opsora-model power      # Llama 3.3 70B — full power"
-echo "     opsora-model coder      # DeepSeek V4 Flash"
-echo "     opsora-model fast       # Ministral 14B — ringan"
-echo ""
-echo "  4. Jalankan Claude Code:"
-echo "     opsora-claude"
-echo "     # atau: claude"
-echo ""
-echo "Model tersedia: power, balanced, coder, reasoning, nemotron, fast, qwen-plus, qwen-max, local"
-echo "Detail: cat $INSTALL_DIR/models.json | jq '.profiles | keys'"
+echo "Kalau masih 'API Usage Billing', ketik /logout lalu opsora-claude lagi."

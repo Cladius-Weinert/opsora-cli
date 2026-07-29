@@ -1,80 +1,64 @@
 {
-  "version": "1.0",
-  "provider": "Opsora LiteLLM Gateway",
+  "version": "2.0",
+  "provider": "Opsora NVIDIA Proxy",
   "api_base": "https://integrate.api.nvidia.com/v1",
+  "audited": "2026-07-27",
   "profiles": {
-    "power": {
-      "claude_model": "opsora-power",
-      "nvidia_id": "meta/llama-3.3-70b-instruct",
-      "label": "Full Power — coding & arsitektur",
-      "context": "128K",
-      "tier": "deep"
+    "mini": {
+      "claude_model": "opsora-mini",
+      "nvidia_id": "nvidia/nemotron-mini-4b-instruct",
+      "label": "Mini — tercepat (~0.2s)",
+      "latency_ms": 200,
+      "tier": "fast"
+    },
+    "fast": {
+      "claude_model": "opsora-fast",
+      "nvidia_id": "meta/llama-3.2-3b-instruct",
+      "label": "Fast — ringan (~0.4s)",
+      "latency_ms": 400,
+      "tier": "fast"
     },
     "balanced": {
       "claude_model": "opsora-balanced",
       "nvidia_id": "meta/llama-3.1-70b-instruct",
-      "label": "Balanced — sehari-hari",
-      "context": "128K",
+      "label": "Balanced — sehari-hari (~0.5s)",
+      "latency_ms": 500,
       "tier": "balanced"
+    },
+    "power": {
+      "claude_model": "opsora-power",
+      "nvidia_id": "meta/llama-3.2-90b-vision-instruct",
+      "label": "Power — Llama 90B (~0.6s)",
+      "latency_ms": 600,
+      "tier": "deep"
     },
     "coder": {
       "claude_model": "opsora-coder",
-      "nvidia_id": "deepseek-ai/deepseek-v4-flash",
-      "label": "Coder — refactor & debug",
-      "context": "128K",
-      "tier": "deep"
-    },
-    "reasoning": {
-      "claude_model": "opsora-reasoning",
-      "nvidia_id": "deepseek-ai/deepseek-r1",
-      "label": "Reasoning — analisis kompleks",
-      "context": "64K",
+      "nvidia_id": "nvidia/nemotron-3-nano-30b-a3b",
+      "label": "Coder — Nemotron Nano 30B (~0.3s)",
+      "latency_ms": 300,
       "tier": "deep"
     },
     "nemotron": {
       "claude_model": "opsora-nemotron",
-      "nvidia_id": "nvidia/nemotron-4-340b-instruct",
-      "label": "Nemotron 340B — flagship NVIDIA",
-      "context": "128K",
+      "nvidia_id": "nvidia/nemotron-3-nano-30b-a3b",
+      "label": "Nemotron Nano 30B",
+      "latency_ms": 300,
       "tier": "deep"
-    },
-    "fast": {
-      "claude_model": "opsora-fast",
-      "nvidia_id": "mistralai/ministral-14b-instruct-2512",
-      "label": "Fast — background & ringan",
-      "context": "128K",
-      "tier": "fast"
-    },
-    "qwen-plus": {
-      "claude_model": "opsora-qwen-plus",
-      "provider": "Alibaba",
-      "nvidia_id": "qwen-plus",
-      "label": "Qwen Plus — Alibaba cloud",
-      "context": "128K",
-      "tier": "balanced"
-    },
-    "qwen-max": {
-      "claude_model": "opsora-qwen-max",
-      "provider": "Alibaba",
-      "nvidia_id": "qwen-max",
-      "label": "Qwen Max — full power Alibaba",
-      "context": "128K",
-      "tier": "deep"
-    },
-    "local": {
-      "claude_model": "opsora-local",
-      "provider": "Ollama",
-      "nvidia_id": "qwen2.5-coder:7b",
-      "label": "Local — offline di HP",
-      "context": "32K",
-      "tier": "fast"
     }
   },
+  "deprecated": {
+    "meta/llama-3.3-70b-instruct": "TIMEOUT — replaced by llama-3.2-90b-vision",
+    "deepseek-ai/deepseek-v4-flash": "404/timeout",
+    "deepseek-ai/deepseek-r1": "404",
+    "mistralai/mixtral-8x22b-v0.1": "404/410 Gone",
+    "nvidia/nemotron-4-340b-instruct": "404"
+  },
   "recommended": {
-    "default": "power",
-    "background": "fast",
+    "default": "fast",
+    "background": "mini",
     "coding": "coder",
     "architecture": "power",
-    "offline": "local"
+    "daily": "balanced"
   }
 }

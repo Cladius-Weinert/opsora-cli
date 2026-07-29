@@ -1,25 +1,25 @@
 {
+  "model": "opsora-fast",
   "env": {
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
     "ANTHROPIC_AUTH_TOKEN": "sk-opsora-local",
     "ANTHROPIC_API_KEY": "",
-    "ANTHROPIC_MODEL": "opsora-balanced",
-    "ANTHROPIC_SMALL_FAST_MODEL": "opsora-fast",
+    "ANTHROPIC_MODEL": "opsora-fast",
+    "ANTHROPIC_SMALL_FAST_MODEL": "opsora-mini",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "opsora-balanced",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "opsora-power",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "opsora-fast",
-    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1"
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+    "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
   },
   "availableModels": [
-    "opsora-balanced",
+    "opsora-mini",
     "opsora-fast",
+    "opsora-balanced",
     "opsora-power",
     "opsora-coder",
-    "opsora-mixtral",
-    "opsora-nemotron",
-    "opsora-nvcf-gemma",
-    "opsora-nvcf-llama70",
-    "opsora-qwen-plus",
-    "opsora-local"
+    "claude-haiku-4-5-20251001",
+    "claude-sonnet-4-6",
+    "claude-opus-4-20250514"
   ]
 }

@@ -57,6 +57,7 @@ cp -f "$QWEN_SRC/rpm-config.json" "$INSTALL_DIR/"
 cp -f "$QWEN_SRC/embedding-config.json" "$INSTALL_DIR/"
 cp -f "$QWEN_SRC/"*.sh "$INSTALL_DIR/" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/"*.sh 2>/dev/null || true
+[[ -f "$QWEN_SRC/opsora-audit.sh" ]] && chmod +x "$INSTALL_DIR/opsora-audit.sh"
 
 if [[ -d "$QWEN_SRC/agents" ]]; then
   cp -f "$QWEN_SRC/agents/"*.md "$HOME/.qwen/agents/" 2>/dev/null || true
@@ -122,8 +123,14 @@ cat >"$BIN_DIR/opsora-qwen-embed" <<'WRAP'
 exec "${OPSORA_QWEN_DIR:-$HOME/.opsora/qwen-code}/embed.sh" "$@"
 WRAP
 
+cat >"$BIN_DIR/opsora-audit" <<'WRAP'
+#!/data/data/com.termux/files/usr/bin/bash
+exec "${OPSORA_QWEN_DIR:-$HOME/.opsora/qwen-code}/opsora-audit.sh" "$@"
+WRAP
+
 chmod +x "$BIN_DIR/opsora-qwen" "$BIN_DIR/opsora-qwen-model" \
-  "$BIN_DIR/opsora-qwen-sync" "$BIN_DIR/opsora-qwen-test" "$BIN_DIR/opsora-qwen-embed"
+  "$BIN_DIR/opsora-qwen-sync" "$BIN_DIR/opsora-qwen-test" "$BIN_DIR/opsora-qwen-embed" \
+  "$BIN_DIR/opsora-audit"
 
 # ── PATH + aliases ──────────────────────────────────────────────
 MARKER="# >>> opsora-qwen-termux >>>"
@@ -140,6 +147,7 @@ alias qw-power='opsora-qwen-model power && qw'
 alias qw-fast='opsora-qwen-model fast && qw'
 alias qw-reason='opsora-qwen-model reasoning && qw'
 alias qw-nvidia='opsora-qwen-model nvidia-coder && qw'
+alias qw-audit='opsora-audit all'
 # <<< opsora-qwen-termux <<<
 BASHRC
   ok "Added aliases ke ~/.bashrc"
@@ -166,9 +174,13 @@ echo "     opsora-qwen-model power       # Qwen3 Coder Plus (default)"
 echo "     opsora-qwen-model reasoning   # Qwen3.7 Max + thinking"
 echo "     opsora-qwen-model nvidia-coder # DeepSeek V4 Flash"
 echo ""
-echo "  5. Jalankan Qwen Code:"
+echo "  5. Audit & konteks Opsora:"
+echo "     opsora-audit all"
+echo "     opsora-audit export   # load di Qwen: @context-bundle.md"
+echo ""
+echo "  6. Jalankan Qwen Code:"
 echo "     opsora-qwen"
-echo "     # atau: qw-power"
+echo "     # atau: qw-power / qw-audit"
 echo ""
 echo "Profiles: power, reasoning, balanced, coder-next, fast,"
 echo "          nvidia-coder, nvidia-reasoning, nvidia-power, nvidia-fast, coding-plan"

@@ -11,6 +11,8 @@ Paket ini menginstal **Qwen Code CLI** di HP Android (Termux) dengan konfigurasi
 
 > **Penting:** Paket resmi `@qwen-code/qwen-code` gagal di Termux. Wajib pakai fork: `@mmmbuto/qwen-code-termux`.
 
+> **Konteks lengkap Opsora:** Baca [`OPSORA_MEMORY_KONTEKS.md`](./OPSORA_MEMORY_KONTEKS.md) — memory file audit 2 hari terakhir (repos, credentials, MCP, skills, arsitektur, GitHub activity).
+
 ## Model Profiles (terverifikasi 2026-07-28)
 
 | Profile | Model | Provider | Context | Fitur |
@@ -78,6 +80,21 @@ curl -fsSL https://raw.githubusercontent.com/Cladius-Weinert/opsora-cli/main/qwe
 | `qw-fast` | Fast model + start |
 | `qw-reason` | Reasoning model + start |
 | `qw-nvidia` | NVIDIA coder + start |
+| `opsora-audit` | Audit secret/repos/health + export konteks |
+| `qw-audit` | Shortcut: `opsora-audit all` |
+
+## Skill Opsora Audit
+
+Script + skill untuk mempermudah onboarding Qwen Code:
+
+```bash
+opsora-audit all          # audit lengkap (secret masked, repos, health)
+opsora-audit export       # buat context-bundle.md untuk di-load Qwen
+opsora-audit reveal --yes-i-understand  # nilai penuh → file lokal privat saja
+```
+
+- **Agent:** `agents/opsora-audit.md` → copy ke `~/.qwen/agents/`
+- **Skill doc:** `skills/opsora-audit/SKILL.md`
 
 ## API Keys
 

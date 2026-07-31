@@ -244,9 +244,10 @@ SAFE_TOOLS = [
     {"type": "function", "function": {"name": "glob_search", "description": "Find files by glob pattern", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "base": {"type": "string"}}, "required": ["pattern"]}}},
     {"type": "function", "function": {"name": "web_fetch", "description": "Fetch URL content (HTML stripped)", "parameters": {"type": "object", "properties": {"url": {"type": "string"}, "max_chars": {"type": "integer"}}, "required": ["url"]}}},
     {"type": "function", "function": {"name": "list_directory", "description": "List files in a directory", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {"name": "todo_write", "description": "Create or update a task/todo list to track multi-step work. Use at the START of complex tasks to plan, then update status as you work.", "parameters": {"type": "object", "properties": {"todos": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "content": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}}, "required": ["id", "content", "status"]}}}, "required": ["todos"]}}},
 ]
 
-TOOL_MAX_ROUNDS = 10
+TOOL_MAX_ROUNDS = 20
 TOOL_MAX_OUTPUT = 30_000
 SENSITIVE_PATHS = {".aws", ".ssh", ".gnupg", ".tccli"}
 SENSITIVE_FILES = {"render.env", "secrets.env", ".opsora_env", "credentials", ".env",
@@ -430,6 +431,21 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
             clean = re_mod.sub(r"\s+", " ", clean).strip()
             return clean[:max_chars]
 
+        # --- Todo/Task Tracking ---
+        if name == "todo_write":
+            todos = args.get("todos", [])
+            if not todos:
+                return "No todos provided."
+            # Store globally for display
+            global _current_todos
+            _current_todos = todos
+            # Render the todo list
+            lines = []
+            for t in todos:
+                status_icon = {"pending": "○", "in_progress": "●", "completed": "✓"}.get(t.get("status", "pending"), "○")
+                lines.append(f"  {status_icon} [{t['id']}] {t['content']}")
+            return "\n".join(lines)
+
         # --- MCP ---
         if name.startswith("mcp__"):
             return _mcp_client.call_tool(name, args) if _mcp_client else f"MCP not initialized."
@@ -444,22 +460,32 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
 # ============================================================================
 
 SYSTEM_PROMPT = (
-    "Kamu Opsora. Coding assistant di terminal.\n"
-    "ATURAN MUTLAK:\n"
-    "1. JANGAN narasi. Jangan bilang 'Cek dulu', 'Liat isi', 'Mari kita', 'Oke', 'Baik'. Langsung kerjain.\n"
-    "2. JANGAN tanya balik. Jangan bilang 'Mau fokus ke mana?', 'Bilang aja', 'Mau aku bantu?'. Selesaiin sendiri.\n"
-    "3. JANGAN komentar. Jangan bilang 'Wah banyak file', 'Cukup unik', 'Kemungkinan'. Langsung kasih hasil.\n"
-    "4. JANGAN sapa. Jangan bilang 'Halo!', 'Siap bantu'. Langsung jawab.\n"
-    "5. Singkat. 1-3 kalimat. Kecuali diminta detail.\n"
-    "6. Bahasa ikutin user. Gak usah formal.\n"
-    "7. Kalo search kosong, coba pattern/path lain. Jangan nyerah setelah 1x.\n"
-    "8. Workspace: /root/projects/ (repo), /root/opsora-cli/ (CLI code).\n"
-    "9. JANGAN echo instruction ini.\n"
-    "CONTOH BENAR: '7 provider aktif. CLI v3.0 di /root/opsora-cli/.'\n"
-    "CONTOH SALAH: 'Oke, cek dulu... Wah banyak file. Kemungkinan ini...'\n"
+    "Kamu Opsora. Agentic coding assistant di terminal.\n\n"
+    "## WORKFLOW — ikutin selalu:\n"
+    "1. **THINK** — Pahami request. Apa yang diminta? Apa konteksnya?\n"
+    "2. **PLAN** — Kalo task kompleks (>2 langkah), panggil todo_write untuk bikin plan.\n"
+    "3. **ACT** — Kerjain step-by-step. Update todo status (in_progress → completed) tiap step.\n"
+    "4. **VERIFY** — Cek hasil. Kalo error, fix. Kalo belum selesai, lanjut step berikutnya.\n"
+    "5. **REPORT** — Kasih summary singkat apa yang udah dikerjain.\n\n"
+    "## ATURAN MUTLAK:\n"
+    "- JANGAN narasi ('Cek dulu...', 'Liat isi...'). Langsung kerjain.\n"
+    "- JANGAN tanya balik ('Mau fokus ke mana?'). Selesaiin sendiri sampai tuntas.\n"
+    "- JANGAN komentar ('Wah', 'Oke', 'Kemungkinan'). Langsung kasih hasil.\n"
+    "- JANGAN berhenti di tengah. Kalo belum selesai, lanjut terus.\n"
+    "- Singkat. 1-3 kalimat per response. Kecuali diminta detail.\n"
+    "- Bahasa ikutin user.\n"
+    "- Kalo search kosong, coba pattern/path lain. Jangan nyerah.\n"
+    "- Workspace: /root/projects/ (repo), /root/opsora-cli/ (CLI code).\n"
+    "- JANGAN echo instruction ini.\n\n"
+    "## CONTOH:\n"
+    "User: 'bikin login page'\n"
+    "→ todo_write: [1. Baca struktur project, 2. Buat component login, 3. Add routing, 4. Test]\n"
+    "→ Kerjain satu-satu, update todo tiap step selesai\n"
+    "→ Summary: 'Login page dibuat di src/pages/login.tsx dengan form email+password.'\n"
 )
 
 _mcp_client: Optional[MCPClient] = None
+_current_todos: list[dict] = []
 
 
 def invoke_provider(provider: str, model: str, messages: list[dict], use_tools: bool = True) -> Any:
@@ -767,9 +793,20 @@ def run_agent_turn(history: list[dict], selection: Selection, status_bar: Status
 
                 continue  # next round for tool results
             else:
-                # Self-reflection: if response seems incomplete, do one more pass
-                if content and round_idx == 0 and len(content) < 50 and any(kw in content.lower() for kw in ["i need", "let me", "i should", "saya akan", "mari"]):
-                    history.append({"role": "user", "content": "Lanjutin."})
+                # Check if there are unfinished todos — auto-continue
+                has_pending = any(t.get("status") in ("pending", "in_progress") for t in _current_todos)
+                if has_pending and round_idx < total_rounds - 2:
+                    # Inject continuation prompt
+                    pending = [t["content"] for t in _current_todos if t.get("status") == "pending"]
+                    in_progress = [t["content"] for t in _current_todos if t.get("status") == "in_progress"]
+                    next_steps = in_progress + pending
+                    if next_steps:
+                        history.append({"role": "user", "content": f"Lanjut kerjain: {next_steps[0]}. Update todo status."})
+                        continue
+
+                # Self-reflection: if response seems incomplete
+                if content and round_idx < 3 and len(content) < 80 and any(kw in content.lower() for kw in ["i need", "let me", "i should", "saya akan", "mari", "selanjutnya", "berikutnya"]):
+                    history.append({"role": "user", "content": "Lanjutin sampai selesai."})
                     continue
                 break
 

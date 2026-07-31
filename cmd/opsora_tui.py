@@ -226,6 +226,24 @@ def render_tool_call(name: str, args: dict[str, Any], output: str) -> None:
         args_parts.append(sv)
     args_short = ", ".join(args_parts)
 
+    # Special rendering for todo_write — show as task list
+    if name == "todo_write":
+        todos = args.get("todos", [])
+        if todos:
+            console.print()
+            for t in todos:
+                status = t.get("status", "pending")
+                tid = t.get("id", "?")
+                content = t.get("content", "")
+                if status == "completed":
+                    console.print(Text(f"  ✓ [{tid}] {content}", style="green dim"))
+                elif status == "in_progress":
+                    console.print(Text(f"  ● [{tid}] {content}", style="cyan bold"))
+                else:
+                    console.print(Text(f"  ○ [{tid}] {content}", style="dim"))
+            console.print()
+        return
+
     # One-line header: icon name(args)
     console.print(Text(f"  {icon} {name}({args_short})", style="dim yellow"))
 

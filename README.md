@@ -37,6 +37,12 @@
 
 Most AI coding tools lock you into a single provider. Opsora connects to **seven providers simultaneously** and auto-routes your prompts to the best model based on intent — code questions go to code-optimized models, quick questions go to fast models, and complex analysis goes to flagship models. All from a single terminal prompt.
 
+✅ **Open source & MIT licensed** — no vendor lock-in, fully auditable.
+✅ **Terminal-native UI** — rich TUI with streaming responses, syntax highlighting, and status bar — no browser needed.
+✅ **Built-in tooling** — `read_file`, `write_file`, `run_command`, `memory_search`, `graphify_query`, and more — all safe and permission-aware.
+✅ **Automatic fallback** — if your primary provider fails, Opsora cascades to the next in your configured order.
+✅ **Local-first** — use Ollama for fully offline, private execution.
+
 ```
 ┌──────────────────────────────────────────────────────────┐
 │  OPSORA v2.0 — Codex/Cursor Edition                      │

@@ -173,14 +173,21 @@ class StatusBar:
 
 def stream_markdown(text: str, speed: float = 0.012) -> None:
     """Stream markdown text word-by-word with Rich Live display."""
+    if not text or not text.strip():
+        return
     words = text.split(" ")
     out = ""
-    with Live(refresh_per_second=30, auto_refresh=True, transient=False) as live:
-        for word in words:
-            out += word + " "
-            live.update(Markdown(out))
-            time.sleep(speed)
-    console.print()
+    try:
+        with Live(refresh_per_second=30, auto_refresh=True, transient=False) as live:
+            for word in words:
+                out += word + " "
+                live.update(Markdown(out))
+                time.sleep(speed)
+        console.print()
+    except Exception:
+        # Fallback: just print without streaming if Live fails
+        console.print(Markdown(text))
+        console.print()
 
 
 def stream_text_raw(text: str, speed: float = 0.008) -> None:
@@ -201,57 +208,45 @@ def stream_text_raw(text: str, speed: float = 0.008) -> None:
 
 
 def render_tool_call(name: str, args: dict[str, Any], output: str) -> None:
-    """Render a tool call in Codex-style: icon + name + args + output panel."""
+    """Render a tool call — one line header + output panel (no duplicate name)."""
     icons = {
-        "read_file": "📄",
-        "write_file": "✏️",
-        "edit_file": "🔧",
-        "run_command": "💻",
-        "aws_command": "☁️",
-        "memory_add": "🧠",
-        "memory_search": "🔍",
-        "graphify_query": "🕸️",
-        "workspace_status": "📊",
-        "grep_search": "🔎",
-        "glob_search": "📁",
-        "web_fetch": "🌐",
-        "subagent_spawn": "🤖",
+        "read_file": "📄", "write_file": "✏️", "edit_file": "🔧",
+        "run_command": "💻", "aws_command": "☁️", "memory_add": "🧠",
+        "memory_search": "🔍", "graphify_query": "🕸️", "workspace_status": "📊",
+        "grep_search": "🔎", "glob_search": "📁", "web_fetch": "🌐",
+        "list_directory": "📂", "subagent_spawn": "🤖",
     }
     icon = icons.get(name, "⚙")
 
-    args_preview = ", ".join(f"{k}={repr(v)[:40]}" for k, v in args.items())
-    if len(args_preview) > 80:
-        args_preview = args_preview[:77] + "…"
+    # Compact args line
+    args_short = ", ".join(f"{v}" if len(str(v)) < 30 else f"{str(v)[:27]}…" for v in args.values())
+    if len(args_short) > 60:
+        args_short = args_short[:57] + "…"
 
-    console.print(f"  [dim yellow]{icon} {name}[/dim yellow][dim]({args_preview})[/dim]")
+    # Use Text() to avoid Rich markup parsing on args values
+    header = Text(f"  {icon} {name}({args_short})", style="dim yellow")
+    console.print(header)
 
-    if not output:
+    if not output or output.strip() == "":
         return
 
+    # Smart truncation — longer for file reads, shorter for commands
+    max_len = 2000 if name in ("read_file", "grep_search") else 1200
     truncated = output
-    max_len = 800
     if len(output) > max_len:
-        truncated = output[:max_len] + f"\n[dim]… ({len(output) - max_len} chars omitted)[/dim]"
+        truncated = output[:max_len] + f"\n… ({len(output) - max_len} chars lagi)"
 
+    # Syntax highlight for file content
     if name in ("read_file", "write_file", "edit_file"):
         lang = _detect_language(args.get("filepath", ""))
         console.print(Panel(
             Syntax(truncated, lang, theme="monokai", line_numbers=False, word_wrap=True),
-            title=f"{icon} {name}",
-            border_style="dim yellow",
-            box=box.SIMPLE,
-        ))
-    elif name == "run_command":
-        console.print(Panel(
-            truncated,
-            title=f"{icon} {args.get('command', '')}",
             border_style="dim yellow",
             box=box.SIMPLE,
         ))
     else:
         console.print(Panel(
-            truncated,
-            title=f"{icon} {name}",
+            Text(truncated),
             border_style="dim yellow",
             box=box.SIMPLE,
         ))

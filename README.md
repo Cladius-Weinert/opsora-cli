@@ -100,6 +100,18 @@ opsora
 
 ## Features
 
+### 🧠 Problem Solving System
+
+Opsora includes a built-in, repeatable 5-step problem solving system:
+
+1. **THINK** — Analyze the problem, constraints, and context (e.g., file, error, environment).
+2. **PLAN** — List concrete, executable steps (e.g., `glob_search`, `read_file`, `grep_search`).
+3. **ACT** — Execute the first step using real tools; return raw output.
+4. **VERIFY** — Validate correctness, safety, and consistency of the result.
+5. **REPORT** — Summarize progress in 1–3 sentences and declare the *next step*.
+
+This system is used automatically for all complex tasks and is exposed via `cmd/problem_solver.py`.
+
 ### 🎨 Codex/Cursor-Style Terminal UI
 
 A rich terminal interface with real-time provider status, streaming markdown responses, syntax-highlighted code blocks, and a persistent status bar — no browser required.

@@ -14,6 +14,7 @@ def self_reflect(
     history: List[Dict[str, Any]],
     tool_calls: List[Dict[str, Any]] = None,
     tool_outputs: List[str] = None,
+    safe_mode: bool = True,
 ) -> str:
     """
     Generate structured self-reflection before ACT/VERIFY.
@@ -43,9 +44,11 @@ Reflect: Is this plan safe, complete, and aligned with Opsora’s goals? What co
     reflection = "Reflection: Plan looks valid. No critical risks detected. Proceeding."
     if "rm -rf" in user_input or "delete" in user_input.lower():
         reflection = "Reflection: HIGH-RISK command detected. Require explicit confirmation before execution."
+    if not safe_mode:
+        reflection += " WARNING: safe_mode disabled. Proceed with caution."
     
     # 4. Log reflection
-    log_entry = f"REFLECT | {time.time():.0f} | {user_input[:60]}… → {reflection[:80]}…"
+    log_entry = f"REFLECT | {time.time():.0f} | safe_mode={safe_mode} | {user_input[:60]}… → {reflection[:80]}…"
     add_memory(log_entry, source="self_reflect")
     
     return reflection

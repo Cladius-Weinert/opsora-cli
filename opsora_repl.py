@@ -26,6 +26,8 @@ from prompt_toolkit.key_binding import KeyBindings
 
 # Opsora agentic extensions
 from cmd.opsora_reflect import self_reflect
+import sys
+sys.path.insert(0, "/root/opsora-cli/cmd")
 import time
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
 

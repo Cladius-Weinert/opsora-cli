@@ -138,6 +138,7 @@ _TOOL_ICONS = {
     "memory_search": "🔍", "graphify_query": "🕸", "workspace_status": "📊",
     "grep_search": "🔎", "glob_search": "📁", "web_fetch": "🌐",
     "list_directory": "📂", "subagent_spawn": "🤖", "todo_write": "📋",
+    "git_diff": "📝", "git_status": "🔀", "git_log": "📜", "run_tests": "🧪",
 }
 
 

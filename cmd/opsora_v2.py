@@ -239,6 +239,10 @@ SAFE_TOOLS = [
     {"type": "function", "function": {"name": "web_fetch", "description": "Fetch URL content (HTML stripped)", "parameters": {"type": "object", "properties": {"url": {"type": "string"}, "max_chars": {"type": "integer"}}, "required": ["url"]}}},
     {"type": "function", "function": {"name": "list_directory", "description": "List files in a directory", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
     {"type": "function", "function": {"name": "todo_write", "description": "Create or update a task/todo list to track multi-step work. Use at the START of complex tasks to plan, then update status as you work.", "parameters": {"type": "object", "properties": {"todos": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "content": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}}, "required": ["id", "content", "status"]}}}, "required": ["todos"]}}},
+    {"type": "function", "function": {"name": "git_diff", "description": "Show git diff of working tree changes (unstaged). Use to see what files changed and how.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "staged": {"type": "boolean"}}, "required": []}}},
+    {"type": "function", "function": {"name": "git_status", "description": "Show git working tree status — modified, staged, untracked files.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": []}}},
+    {"type": "function", "function": {"name": "git_log", "description": "Show recent git commits with messages.", "parameters": {"type": "object", "properties": {"count": {"type": "integer"}, "path": {"type": "string"}}, "required": []}}},
+    {"type": "function", "function": {"name": "run_tests", "description": "Detect test framework and run tests. Auto-detects pytest, jest, go test, cargo test, etc.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "filter": {"type": "string"}}, "required": []}}},
 ]
 
 TOOL_MAX_ROUNDS = 20
@@ -425,6 +429,72 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
             clean = re_mod.sub(r"\s+", " ", clean).strip()
             return clean[:max_chars]
 
+        # --- Git Tools ---
+        if name == "git_diff":
+            repo_path = args.get("path", str(WORKSPACE_ROOT))
+            if not Path(repo_path).is_absolute():
+                repo_path = str(WORKSPACE_ROOT / repo_path)
+            staged = "--cached" if args.get("staged") else ""
+            result = subprocess.run(
+                f"cd {repo_path} && git diff {staged} --stat && echo '---FULL DIFF---' && git diff {staged}",
+                shell=True, capture_output=True, text=True, timeout=30,
+            )
+            output = (result.stdout or result.stderr or "No changes.").strip()
+            # Truncate large diffs
+            if len(output) > 8000:
+                lines = output.split("\n")
+                stat_end = next((i for i, l in enumerate(lines) if "---FULL DIFF---" in l), 20)
+                output = "\n".join(lines[:stat_end]) + f"\n… diff truncated ({len(output)} chars total)"
+            return output
+
+        if name == "git_status":
+            repo_path = args.get("path", str(WORKSPACE_ROOT))
+            if not Path(repo_path).is_absolute():
+                repo_path = str(WORKSPACE_ROOT / repo_path)
+            result = subprocess.run(
+                f"cd {repo_path} && git status --short",
+                shell=True, capture_output=True, text=True, timeout=10,
+            )
+            output = (result.stdout or result.stderr or "Clean working tree.").strip()
+            return output
+
+        if name == "git_log":
+            repo_path = args.get("path", str(WORKSPACE_ROOT))
+            if not Path(repo_path).is_absolute():
+                repo_path = str(WORKSPACE_ROOT / repo_path)
+            count = args.get("count", 10)
+            result = subprocess.run(
+                f"cd {repo_path} && git log --oneline -{count}",
+                shell=True, capture_output=True, text=True, timeout=10,
+            )
+            return (result.stdout or result.stderr or "No commits found.").strip()
+
+        if name == "run_tests":
+            repo_path = args.get("path", str(WORKSPACE_ROOT))
+            if not Path(repo_path).is_absolute():
+                repo_path = str(WORKSPACE_ROOT / repo_path)
+            test_filter = args.get("filter", "")
+            rp = Path(repo_path)
+
+            # Auto-detect test framework
+            cmd = None
+            if (rp / "pytest.ini").exists() or (rp / "pyproject.toml").exists() or (rp / "setup.py").exists() or list(rp.glob("**/test_*.py")):
+                cmd = f"cd {repo_path} && python3 -m pytest {test_filter} -x -q --tb=short 2>&1 | head -100"
+            elif (rp / "package.json").exists():
+                cmd = f"cd {repo_path} && npm test 2>&1 | head -100"
+            elif (rp / "Cargo.toml").exists():
+                cmd = f"cd {repo_path} && cargo test 2>&1 | head -100"
+            elif (rp / "go.mod").exists():
+                cmd = f"cd {repo_path} && go test ./... 2>&1 | head -100"
+            elif (rp / "Makefile").exists():
+                cmd = f"cd {repo_path} && make test 2>&1 | head -100"
+            else:
+                return "No test framework detected. Supported: pytest, npm test, cargo test, go test, make test."
+
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
+            output = (result.stdout or "") + (result.stderr or "")
+            return output.strip()[:TOOL_MAX_OUTPUT] or f"Tests exited with code {result.returncode}."
+
         # --- Todo/Task Tracking ---
         if name == "todo_write":
             todos = args.get("todos", [])
@@ -480,6 +550,24 @@ SYSTEM_PROMPT = (
 
 _mcp_client: Optional[MCPClient] = None
 _current_todos: list[dict] = []
+_project_context: str = ""
+
+
+def load_project_context() -> str:
+    """Load opsora.md from workspace root or current project dir."""
+    global _project_context
+    candidates = [
+        WORKSPACE_ROOT / "opsora.md",
+        WORKSPACE_ROOT / ".opsora" / "opsora.md",
+        WORKSPACE_ROOT / "OPSORA.md",
+    ]
+    for path in candidates:
+        if path.is_file():
+            content = path.read_text(encoding="utf-8", errors="replace").strip()
+            if content:
+                _project_context = content[:3000]  # Cap at 3000 chars
+                return _project_context
+    return ""
 
 
 def invoke_provider(provider: str, model: str, messages: list[dict], use_tools: bool = True) -> Any:
@@ -727,7 +815,11 @@ def run_agent_turn(history: list[dict], selection: Selection, status_bar: Status
     total_output_chars = 0
 
     for round_idx in range(total_rounds):
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}, *history]
+        # Build system prompt with optional project context
+        sys_prompt = SYSTEM_PROMPT
+        if _project_context:
+            sys_prompt += f"\n\n## PROJECT CONTEXT (from opsora.md):\n{_project_context}\n"
+        messages = [{"role": "system", "content": sys_prompt}, *history]
 
         # Context compression when > 70%
         messages = compress_context(messages, selection)
@@ -1054,9 +1146,22 @@ def _show_tools() -> None:
 def main():
     global _mcp_client, selection
 
+    # Load project context (opsora.md) at startup
+    load_project_context()
+
+    # --- Pipe input support: cat file.txt | opsora "analyze this" ---
+    piped_input = ""
+    if not sys.stdin.isatty():
+        try:
+            piped_input = sys.stdin.read().strip()[:10000]  # Cap at 10K chars
+        except Exception:
+            pass
+
     # --- Non-interactive mode: reuse full agent loop ---
     if len(sys.argv) > 1:
         prompt = " ".join(sys.argv[1:])
+        if piped_input:
+            prompt = f"{prompt}\n\n---\nInput from stdin:\n```\n{piped_input}\n```"
         selection = auto_select_model(prompt)
         history = [{"role": "user", "content": prompt}]
         status_bar = StatusBar(provider=selection.provider, model=selection.model)

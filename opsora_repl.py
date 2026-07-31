@@ -24,6 +24,11 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.styles import Style
 from prompt_toolkit.key_binding import KeyBindings
 
+# Opsora agentic extensions
+from cmd.opsora_reflect import self_reflect
+import time
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+
 console = Console()
 
 # ---------------------------------------------------------------------------
@@ -88,7 +93,15 @@ style = Style.from_dict({
 
 def bottom_toolbar():
     provider, model = MODELS[current_model_idx]
-    return [("class:toolbar", f" [Ctrl+T] Switch Model: {provider}/{model}  |  [Ctrl+C] Cancel  |  [Ctrl+D] Exit ")]
+    # Real-time status
+    status_parts = [
+        f"[green]●[/green] {provider}/{model}",
+        "[dim]|[/dim]",
+        "[cyan]⏱ live timing[/cyan]",
+        "[dim]|[/dim]",
+        "[bold magenta]⚡ opsora v3.1[/bold magenta]",
+    ]
+    return [("class:toolbar", " " + " ".join(status_parts) + " ")]
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +233,10 @@ def chat_with_llm(history: list[dict]) -> None:
 
     for round_idx in range(TOOL_MAX_ROUNDS):
         try:
+            # --- TIMING START ---
+            start_llm = time.time()
+            # ---------------------
+            
             with Live(
                 Spinner("dots", text=f"{provider}/{model} thinking…", style="cyan"),
                 refresh_per_second=15,
@@ -232,40 +249,69 @@ def chat_with_llm(history: list[dict]) -> None:
                     tools=TOOLS,
                     tool_choice="auto",
                 )
-
+            
+            # --- TIMING END LLM ---
+            llm_time = time.time() - start_llm
+            # ----------------------
+            
             msg = response.choices[0].message
             messages.append(msg.model_dump(exclude_none=True))
 
             if msg.content:
-                words = (msg.content or "").split(" ")
+                # Optimized streaming: chunk by sentence, not word
+                import re
+                sentences = re.split(r'(?<=[.!?])\s+', msg.content.strip())
                 out_text = ""
-                with Live(refresh_per_second=25, auto_refresh=True) as live:
-                    for word in words:
-                        out_text += word + " "
+                with Live(refresh_per_second=30, auto_refresh=True) as live:
+                    for sent in sentences:
+                        if not sent.strip():
+                            continue
+                        out_text += sent.strip() + " "
                         live.update(Markdown(out_text))
-                        time.sleep(0.015)
+                        time.sleep(0.03)  # 30ms per sentence
                 console.print()
+                console.print(f"[dim]⏱ LLM response: {llm_time:.2f}s[/dim]")
 
             tool_calls = msg.tool_calls
             if not tool_calls:
                 return
 
+            # --- SELF-REFLECTION HOOK ---
+            start_reflect = time.time()
+            reflection = self_reflect(
+                user_input=history[-1]["content"] if history else "",
+                history=history,
+                tool_calls=[tc.model_dump() for tc in tool_calls],
+            )
+            reflect_time = time.time() - start_reflect
+            console.print(f"[bold blue]🔍 Reflection:[/bold blue] {reflection} [dim]({reflect_time:.2f}s)[/dim]")
+            # ----------------------------
+
             for tc in tool_calls:
                 name = tc.function.name
                 args = json.loads(tc.function.arguments)
-                console.print(f"  [dim yellow]⚙ {name}({json.dumps(args, ensure_ascii=False)[:80]})[/]")
+                console.print(f"  [bold yellow]⚙ {name}({json.dumps(args, ensure_ascii=False)[:80]})[/]")
 
-                with Live(
-                    Spinner("dots", text=f"Executing {name}…", style="yellow"),
-                    refresh_per_second=15,
+                # --- TOOL EXECUTION WITH PROGRESS ---
+                start_tool = time.time()
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TimeElapsedColumn(),
+                    console=console,
                     transient=True,
-                ):
+                ) as progress:
+                    task = progress.add_task(f"Executing {name}…", total=None)
                     output = execute_tool(name, args)
+                    progress.update(task, completed=100)
+                tool_time = time.time() - start_tool
+                # --------------------------------------
 
                 if len(output) > 500:
-                    console.print(Panel(output[:500] + "\n…", title=f"↳ {name}", border_style="dim yellow"))
+                    console.print(Panel(output[:500] + "\n…", title=f"↳ {name} [dim]({tool_time:.2f}s)[/dim]", border_style="yellow"))
                 else:
-                    console.print(Panel(output, title=f"↳ {name}", border_style="dim yellow"))
+                    console.print(Panel(output, title=f"↳ {name} [dim]({tool_time:.2f}s)[/dim]", border_style="yellow"))
 
                 messages.append({
                     "role": "tool",

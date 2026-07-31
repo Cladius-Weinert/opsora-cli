@@ -29,8 +29,10 @@ def workspace_status() -> dict[str, Any]:
             "alibaba": bool(os.environ.get("DASHSCOPE_API_KEY")),
             "openai": bool(os.environ.get("OPENAI_API_KEY")),
         },
-        "cli_version": "3.0",
+        "cli_version": "3.1",
         "android_termux": "termux" in os.environ.get("PREFIX", "").lower(),
+        "ui_mode": "rich-tui",
+        "streaming_optimized": True,
     }
 
 

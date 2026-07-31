@@ -243,6 +243,10 @@ SAFE_TOOLS = [
     {"type": "function", "function": {"name": "git_status", "description": "Show git working tree status — modified, staged, untracked files.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": []}}},
     {"type": "function", "function": {"name": "git_log", "description": "Show recent git commits with messages.", "parameters": {"type": "object", "properties": {"count": {"type": "integer"}, "path": {"type": "string"}}, "required": []}}},
     {"type": "function", "function": {"name": "run_tests", "description": "Detect test framework and run tests. Auto-detects pytest, jest, go test, cargo test, etc.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "filter": {"type": "string"}}, "required": []}}},
+    {"type": "function", "function": {"name": "git_commit", "description": "Stage all changes and commit with a descriptive message. Use after completing a task.", "parameters": {"type": "object", "properties": {"message": {"type": "string"}, "path": {"type": "string"}}, "required": ["message"]}}},
+    {"type": "function", "function": {"name": "lint_check", "description": "Detect and run linter (ruff, flake8, eslint, etc) on a file or directory.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "fix": {"type": "boolean"}}, "required": []}}},
+    {"type": "function", "function": {"name": "image_read", "description": "Read and describe an image file (PNG, JPG, GIF, SVG). Returns image metadata and dimensions.", "parameters": {"type": "object", "properties": {"filepath": {"type": "string"}}, "required": ["filepath"]}}},
+    {"type": "function", "function": {"name": "pip_info", "description": "Show info about an installed Python package: version, location, dependencies.", "parameters": {"type": "object", "properties": {"package": {"type": "string"}}, "required": ["package"]}}},
 ]
 
 TOOL_MAX_ROUNDS = 20
@@ -494,6 +498,95 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
             output = (result.stdout or "") + (result.stderr or "")
             return output.strip()[:TOOL_MAX_OUTPUT] or f"Tests exited with code {result.returncode}."
+
+        if name == "git_commit":
+            repo_path = args.get("path", str(WORKSPACE_ROOT))
+            if not Path(repo_path).is_absolute():
+                repo_path = str(WORKSPACE_ROOT / repo_path)
+            message = args.get("message", "auto-commit")
+            if needs_approval("git_commit"):
+                if not prompt_approval(f"git commit in {repo_path}", message):
+                    return "Commit cancelled."
+            result = subprocess.run(
+                f"cd {repo_path} && git add -A && git commit -m {shlex.quote(message)}",
+                shell=True, capture_output=True, text=True, timeout=30,
+            )
+            return (result.stdout or result.stderr or "Nothing to commit.").strip()
+
+        if name == "lint_check":
+            repo_path = args.get("path", str(WORKSPACE_ROOT))
+            if not Path(repo_path).is_absolute():
+                repo_path = str(WORKSPACE_ROOT / repo_path)
+            fix = "--fix" if args.get("fix") else ""
+            rp = Path(repo_path)
+
+            # Auto-detect linter
+            cmd = None
+            if shutil.which("ruff"):
+                cmd = f"cd {repo_path} && ruff check {fix} . 2>&1 | head -60"
+            elif shutil.which("flake8"):
+                cmd = f"cd {repo_path} && flake8 . 2>&1 | head -60"
+            elif (rp / "package.json").exists() and shutil.which("npx"):
+                cmd = f"cd {repo_path} && npx eslint {fix} . 2>&1 | head -60"
+            elif shutil.which("pylint"):
+                cmd = f"cd {repo_path} && pylint {repo_path} 2>&1 | head -60"
+            else:
+                return "No linter found. Install: ruff, flake8, eslint, or pylint."
+
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
+            return (result.stdout or result.stderr or "No issues found.").strip()[:TOOL_MAX_OUTPUT]
+
+        if name == "image_read":
+            fp = Path(args["filepath"])
+            if not fp.is_absolute():
+                fp = WORKSPACE_ROOT / fp
+            if not fp.exists():
+                return f"ERROR: File not found: {fp}"
+            # Get image metadata using stdlib
+            import struct
+            suffix = fp.suffix.lower()
+            size = fp.stat().st_size
+            size_str = f"{size:,}B" if size < 1024 else f"{size // 1024}KB"
+            info = f"File: {fp.name}  Size: {size_str}  Type: {suffix}"
+
+            # Try to get dimensions for PNG
+            if suffix == ".png" and size > 24:
+                try:
+                    with open(fp, "rb") as f:
+                        f.read(16)  # skip PNG header
+                        w = struct.unpack(">I", f.read(4))[0]
+                        h = struct.unpack(">I", f.read(4))[0]
+                        info += f"  Dimensions: {w}x{h}"
+                except Exception:
+                    pass
+            elif suffix in (".jpg", ".jpeg") and size > 10:
+                try:
+                    with open(fp, "rb") as f:
+                        f.read(2)
+                        while True:
+                            marker, = struct.unpack(">H", f.read(2))
+                            if marker == 0xFFD9:  # EOI
+                                break
+                            if 0xFFC0 <= marker <= 0xFFC3:
+                                f.read(3)
+                                h = struct.unpack(">H", f.read(2))[0]
+                                w = struct.unpack(">H", f.read(2))[0]
+                                info += f"  Dimensions: {w}x{h}"
+                                break
+                            else:
+                                length, = struct.unpack(">H", f.read(2))
+                                f.read(length - 2)
+                except Exception:
+                    pass
+            return info
+
+        if name == "pip_info":
+            pkg = args["package"]
+            result = subprocess.run(
+                f"pip show {shlex.quote(pkg)} 2>&1",
+                shell=True, capture_output=True, text=True, timeout=15,
+            )
+            return (result.stdout or result.stderr or f"Package '{pkg}' not found.").strip()
 
         # --- Todo/Task Tracking ---
         if name == "todo_write":
@@ -1097,7 +1190,119 @@ def handle_command(value: str, history: list[dict], selection: Selection, status
         stream_markdown(result)
         return True, None, None
 
-    console.print(f"[red]Unknown command:[/red] {cmd}. Type [bold]/help[/bold].")
+    # --- Phase 3: Skills (slash commands) ---
+    if cmd == "/review":
+        path = parts[1] if len(parts) > 1 else str(WORKSPACE_ROOT)
+        console.print(Text("  📝 Reviewing changes…", style="cyan"))
+        diff_output = execute_tool("git_diff", {"path": path})
+        status_output = execute_tool("git_status", {"path": path})
+        if "No changes" in diff_output and "Clean" in status_output:
+            console.print(Text("  No changes to review.", style="dim"))
+            return True, None, None
+        # Inject review prompt into history
+        review_prompt = (
+            f"Review these code changes for correctness, security, and quality:\n\n"
+            f"## Git Status:\n{status_output}\n\n## Diff:\n{diff_output[:8000]}\n\n"
+            f"Provide a concise review with: ✓ good parts, ⚠ warnings, ✗ issues."
+        )
+        history.append({"role": "user", "content": review_prompt})
+        history, selection = run_agent_turn(history, selection, status_bar)
+        return True, None, None
+
+    if cmd == "/deploy":
+        target = parts[1] if len(parts) > 1 else "render"
+        console.print(Text(f"  🚀 Deploying to {target}…", style="cyan"))
+        deploy_prompt = f"Deploy the current project to {target}. Check git status first, push if needed, then trigger deployment."
+        history.append({"role": "user", "content": deploy_prompt})
+        history, selection = run_agent_turn(history, selection, status_bar)
+        return True, None, None
+
+    if cmd == "/explain":
+        filepath = parts[1] if len(parts) > 1 else ""
+        if not filepath:
+            console.print(Text("  usage: /explain <filepath> [function]", style="dim"))
+            return True, None, None
+        func_name = parts[2] if len(parts) > 2 else ""
+        content = execute_tool("read_file", {"filepath": filepath})
+        explain_prompt = f"Explain this code{'  specifically the function/class: ' + func_name if func_name else ''}:\n\nFile: {filepath}\n```\n{content[:6000]}\n```"
+        history.append({"role": "user", "content": explain_prompt})
+        history, selection = run_agent_turn(history, selection, status_bar)
+        return True, None, None
+
+    if cmd == "/refactor":
+        filepath = parts[1] if len(parts) > 1 else ""
+        if not filepath:
+            console.print(Text("  usage: /refactor <filepath>", style="dim"))
+            return True, None, None
+        content = execute_tool("read_file", {"filepath": filepath})
+        refactor_prompt = (
+            f"Refactor this code for better readability, performance, and maintainability. "
+            f"Apply changes directly using edit_file:\n\nFile: {filepath}\n```\n{content[:6000]}\n```"
+        )
+        history.append({"role": "user", "content": refactor_prompt})
+        history, selection = run_agent_turn(history, selection, status_bar)
+        return True, None, None
+
+    if cmd == "/test":
+        filepath = parts[1] if len(parts) > 1 else ""
+        target = filepath if filepath else str(WORKSPACE_ROOT)
+        console.print(Text("  🧪 Generating tests…", style="cyan"))
+        test_prompt = (
+            f"Generate tests for {'the file: ' + filepath if filepath else 'the project'}. "
+            f"Read the source code first, then create test files with good coverage. "
+            f"Use the project's existing test framework."
+        )
+        history.append({"role": "user", "content": test_prompt})
+        history, selection = run_agent_turn(history, selection, status_bar)
+        return True, None, None
+
+    if cmd == "/fix-ci":
+        console.print(Text("  🔧 Analyzing CI failures…", style="cyan"))
+        ci_prompt = (
+            "Check for CI/CD failures. Look at recent git log, check if tests pass, "
+            "review any lint errors, and fix the issues."
+        )
+        history.append({"role": "user", "content": ci_prompt})
+        history, selection = run_agent_turn(history, selection, status_bar)
+        return True, None, None
+
+    # --- Phase 4: Polish ---
+    if cmd == "/cost":
+        total_tokens = sum(len(str(m.get("content", ""))) for m in history) // 4
+        _, total_cost = estimate_cost(selection.model, total_tokens * 3, total_tokens)
+        console.print()
+        console.print(Text(f"  Session: {len(history)} messages", style="dim"))
+        console.print(Text(f"  Tokens:  ~{total_tokens:,}", style="dim"))
+        console.print(Text(f"  Cost:    ${total_cost:.4f}", style="cyan"))
+        console.print(Text(f"  Model:   {selection.provider}:{selection.model}", style="dim"))
+        console.print()
+        return True, None, None
+
+    if cmd == "/copy":
+        # Copy last assistant response to clipboard
+        for msg in reversed(history):
+            if msg.get("role") == "assistant" and msg.get("content"):
+                content = msg["content"]
+                try:
+                    subprocess.run(["termux-clipboard-set"], input=content, text=True, timeout=5)
+                    console.print(Text(f"  ✓ Copied {len(content)} chars to clipboard", style="green"))
+                except Exception:
+                    console.print(Text("  ✗ termux-clipboard-set not available", style="red"))
+                return True, None, None
+        console.print(Text("  No response to copy.", style="dim"))
+        return True, None, None
+
+    if cmd == "/fork":
+        # Fork current session — save and start fresh with context
+        if history:
+            title = generate_session_title(history[:4], selection)
+            fork_id = save_session(session_id, f"fork: {title}", selection.provider, selection.model, get_approval_mode().value, history)
+            console.print(Text(f"  ✓ Session forked: {fork_id[:8]}", style="green"))
+            history.clear()
+            _current_todos.clear()
+        return True, None, None
+
+    console.print(Text(f"  Unknown: {cmd}. Type /help", style="red"))
     return True, None, None
 
 

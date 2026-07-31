@@ -139,6 +139,7 @@ _TOOL_ICONS = {
     "grep_search": "🔎", "glob_search": "📁", "web_fetch": "🌐",
     "list_directory": "📂", "subagent_spawn": "🤖", "todo_write": "📋",
     "git_diff": "📝", "git_status": "🔀", "git_log": "📜", "run_tests": "🧪",
+    "git_commit": "📦", "lint_check": "🔍", "image_read": "🖼️", "pip_info": "📋",
 }
 
 
@@ -270,9 +271,11 @@ def render_file_tree(path: str, max_depth: int = 3, max_items: int = 50) -> None
 
 def render_help() -> None:
     """Print help as clean text, no panels."""
+    console.print()
+    console.print(Text("  commands", style="bold cyan"))
     lines = [
         ("  /help", "tampilin ini"),
-        ("  /status", "cek provider & tools"),
+        ("  /status", "provider & tools"),
         ("  /models", "list model"),
         ("  /tools", "daftar tools"),
         ("  /mode", "ganti approval mode"),
@@ -286,12 +289,34 @@ def render_help() -> None:
         ("  /diff <a> <b>", "bandingin 2 file"),
         ("  /memory <q>", "cari di memory"),
         ("  /agent <goal>", "spawn sub-agents"),
+    ]
+    for cmd, desc in lines:
+        console.print(Text(cmd, style="bold cyan"), Text(f"  {desc}", style="dim"))
+
+    console.print()
+    console.print(Text("  skills", style="bold cyan"))
+    skills = [
+        ("  /review [path]", "review code changes (git diff)"),
+        ("  /deploy [target]", "deploy ke render/vercel"),
+        ("  /explain <file>", "explain code"),
+        ("  /refactor <file>", "refactor code"),
+        ("  /test [file]", "generate & run tests"),
+        ("  /fix-ci", "fix CI failures"),
+    ]
+    for cmd, desc in skills:
+        console.print(Text(cmd, style="bold green"), Text(f"  {desc}", style="dim"))
+
+    console.print()
+    console.print(Text("  other", style="bold cyan"))
+    other = [
+        ("  /cost", "session cost & tokens"),
+        ("  /copy", "copy last response to clipboard"),
+        ("  /fork", "fork session (save + clear)"),
         ("  /clear", "bersihin layar"),
         ("  /exit", "keluar"),
     ]
-    console.print()
-    for cmd, desc in lines:
-        console.print(Text(cmd, style="bold cyan"), Text(f"  {desc}", style="dim"))
+    for cmd, desc in other:
+        console.print(Text(cmd, style="bold yellow"), Text(f"  {desc}", style="dim"))
     console.print()
 
 

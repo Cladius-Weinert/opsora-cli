@@ -57,9 +57,9 @@ class ApprovalMode(Enum):
     @property
     def description(self) -> str:
         return {
-            ApprovalMode.SUGGEST: "Read-only — no edits or commands without approval",
-            ApprovalMode.AUTO_EDIT: "File edits auto-approved, commands need approval",
-            ApprovalMode.FULL_AUTO: "Everything auto-approved in sandbox",
+            ApprovalMode.SUGGEST: "Read-only — edit & command minta izin dulu",
+            ApprovalMode.AUTO_EDIT: "Edit file otomatis, command minta izin",
+            ApprovalMode.FULL_AUTO: "Semua otomatis, langsung gas",
         }[self]
 
 
@@ -100,10 +100,10 @@ def prompt_approval(action: str, detail: str = "") -> bool:
     panel_content = action
     if detail:
         panel_content += f"\n\n{detail}"
-    console.print(Panel(panel_content, title="[yellow]Approval Required[/yellow]", border_style="yellow", box=box.ROUNDED))
+    console.print(Panel(panel_content, title="[yellow]Izin dulu[/yellow]", border_style="yellow", box=box.ROUNDED))
     try:
-        answer = console.input("[bold yellow]Approve? [Y/n] [/bold yellow]").strip().lower()
-        return answer in ("", "y", "yes")
+        answer = console.input("[bold yellow]Lanjut? [Y/n] [/bold yellow]").strip().lower()
+        return answer in ("", "y", "yes", "lanjut", "gas")
     except (EOFError, KeyboardInterrupt):
         return False
 
@@ -436,21 +436,24 @@ def render_welcome(
 
 def render_help() -> Panel:
     return Panel(
-        "[bold]/help[/bold]          Show commands\n"
-        "[bold]/status[/bold]        Provider & tool status\n"
-        "[bold]/models[/bold]        Provider routes\n"
-        "[bold]/tools[/bold]         Available tools\n"
-        "[bold]/mode[/bold]          Cycle approval mode\n"
-        "[bold]/tree[/bold] [path]    File tree\n"
-        "[bold]/sessions[/bold]      List saved sessions\n"
-        "[bold]/resume[/bold] <id>   Resume a session\n"
-        "[bold]/new[/bold]           New conversation\n"
-        "[bold]/run[/bold] <cmd>     Quick shell command\n"
-        "[bold]/read[/bold] <file>   Quick file read\n"
-        "[bold]/memory[/bold] <q>   Search memory\n"
-        "[bold]/clear[/bold]         Clear screen\n"
-        "[bold]/exit[/bold]          Exit",
-        title="[bold cyan]Commands[/bold cyan]",
+        "[bold]/help[/bold]          Tampilin ini\n"
+        "[bold]/status[/bold]        Cek provider & tools\n"
+        "[bold]/models[/bold]        Liat model yang tersedia\n"
+        "[bold]/tools[/bold]         Daftar tools\n"
+        "[bold]/mode[/bold]          Ganti approval mode\n"
+        "[bold]/tree[/bold] [path]    Liat struktur folder\n"
+        "[bold]/sessions[/bold]      Daftar session tersimpan\n"
+        "[bold]/resume[/bold] <id>   Lanjutin session\n"
+        "[bold]/save[/bold] [nama]   Simpan session\n"
+        "[bold]/new[/bold]           Mulai obrolan baru\n"
+        "[bold]/run[/bold] <cmd>     Jalankan command\n"
+        "[bold]/read[/bold] <file>   Baca file\n"
+        "[bold]/diff[/bold] <a> <b>  Bandingin 2 file\n"
+        "[bold]/memory[/bold] <q>   Cari di memory\n"
+        "[bold]/agent[/bold] <goal>  Spawn sub-agents\n"
+        "[bold]/clear[/bold]         Bersihin layar\n"
+        "[bold]/exit[/bold]          Keluar",
+        title="[bold cyan]Command[/bold cyan]",
         border_style="cyan",
         box=box.ROUNDED,
     )

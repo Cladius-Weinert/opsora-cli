@@ -395,14 +395,11 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
 # ============================================================================
 
 SYSTEM_PROMPT = (
-    "You are Opsora, a powerful agentic coding assistant running in a terminal.\n"
-    "## Guidelines\n"
-    "- Be direct, precise, and concise\n"
-    "- Use Indonesian for Indonesian input, English otherwise\n"
-    "- Use tools proactively when they help\n"
-    "- For code tasks: read existing code first, then edit precisely\n"
-    "- After making changes, verify with tests or linting if possible\n"
-    "- Never ask permission for safe operations (read, search)\n"
+    "Kamu Opsora — teman coding di terminal. Bukan asisten korporat.\n"
+    "Ngomong santai, to the point. Jawab pake bahasa yang sama dengan user.\n"
+    "Kalo ditanya kode, langsung kerjain — baca file dulu, edit yang perlu, cek hasilnya.\n"
+    "Jangan basa-basi. Jangan bilang 'tentu!' atau 'siap membantu!'. Langsung gas.\n"
+    "Kalo gak tau, bilang gak tau. Jangan ngarang.\n"
 )
 
 _mcp_client: Optional[MCPClient] = None
@@ -851,9 +848,10 @@ def main():
         cwd=str(WORKSPACE_ROOT),
     )
 
-    # Welcome
-    console.print(render_welcome(selection.provider, selection.model, approval_mode, len(SAFE_TOOLS), str(WORKSPACE_ROOT)))
-    console.print(status_bar.render())
+    # Welcome — minimal, no corporate fluff
+    console.print()
+    console.print(Text("opsora", style="bold cyan"), Text(f"  {selection.provider}:{selection.model}  ·  {len(SAFE_TOOLS)} tools  ·  {approval_mode.value}", style="dim"))
+    console.print(Text("  Ketik apa aja atau /help buat command. Ctrl+A ganti mode.", style="dim"))
     console.print()
 
     # Session
@@ -878,17 +876,15 @@ def main():
     )
 
     session = PromptSession(
-        message=lambda: HTML(
-            f'<style fg="cyan">bold</style> <style fg="white">opsora</style> '
-            f'<style fg="ansiblue">[{selection.provider}:{selection.model}]</style> '
-            f'<style fg="ansiyellow">❯</style> '
-        ),
+        message=lambda: [
+            ("fg:cyan bold", "opsora "),
+            ("fg:ansibrightblack", f"{selection.provider}:{selection.model} "),
+            ("fg:ansiyellow", "❯ "),
+        ],
         key_bindings=kb,
         completer=completions,
         style=PromptStyle.from_dict({"prompt": "bold cyan"}),
     )
-
-    console.print(f"[dim]{'─' * 60}[/dim]")
 
     while True:
         try:
@@ -910,8 +906,6 @@ def main():
                         session_id = resume_id
                 if not cont:
                     break
-                console.print(status_bar.render())
-                console.print(f"[dim]{'─' * 60}[/dim]")
                 continue
 
             # Agent turn
@@ -919,8 +913,6 @@ def main():
             selection = auto_select_model(prompt_text)
             status_bar.provider = selection.provider
             status_bar.model = selection.model
-
-            console.print(status_bar.render())
 
             history, selection = run_agent_turn(history, selection, status_bar)
 
@@ -930,17 +922,14 @@ def main():
                 save_session(session_id, title, selection.provider, selection.model, get_approval_mode().value, history)
 
             status_bar.session_tokens = sum(len(str(m.get("content", ""))) for m in history) // 4
-            console.print(status_bar.render())
-            console.print(f"[dim]{'─' * 60}[/dim]")
 
         except KeyboardInterrupt:
-            console.print("\n[dim]Interrupted. /exit to quit.[/dim]")
+            console.print("\n[dim]/exit untuk keluar[/dim]")
             continue
         except EOFError:
             break
         except Exception as e:
             console.print(f"[red]✗ {e}[/red]")
-            console.print(f"[dim]{'─' * 60}[/dim]")
 
     # Cleanup
     if _mcp_client:
@@ -951,7 +940,7 @@ def main():
         title = history[0].get("content", "untitled")[:40]
         save_session(session_id, title, selection.provider, selection.model, get_approval_mode().value, history)
 
-    console.print("\n[dim]Meninggalkan Opsora CLI…[/dim]")
+    console.print("\n[dim]Dah.[/dim]")
 
 
 if __name__ == "__main__":

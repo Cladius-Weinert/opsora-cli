@@ -341,7 +341,7 @@ def main():
         except EOFError:
             break
 
-    console.print("\n[dim]Meninggalkan Opsora CLI…[/dim]")
+    console.print("\n[dim]Dah.[/dim]")
 
 
 if __name__ == "__main__":

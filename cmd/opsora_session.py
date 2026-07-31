@@ -75,6 +75,10 @@ def save_session(
     approval_mode: str,
     messages: list[dict[str, Any]],
 ) -> str:
+    if not session_id or not isinstance(session_id, str):
+        raise ValueError("session_id must be a non-empty string")
+    if not isinstance(messages, list):
+        raise TypeError("messages must be a list")
     now = time.time()
     conn = _conn()
     try:
@@ -92,6 +96,8 @@ def save_session(
             )
 
         for msg in messages:
+            if not isinstance(msg, dict):
+                continue
             tool_calls_json = json.dumps(msg.get("tool_calls"), ensure_ascii=False) if msg.get("tool_calls") else None
             conn.execute(
                 "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, name, created_at) VALUES (?,?,?,?,?,?,?)",
@@ -108,6 +114,10 @@ def save_session(
 
         conn.commit()
         return session_id
+    except sqlite3.IntegrityError as e:
+        raise ValueError(f"Database integrity error: {e}")
+    except Exception as e:
+        raise RuntimeError(f"Session save failed: {e}")
     finally:
         conn.close()
 

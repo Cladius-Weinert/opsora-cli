@@ -1,6 +1,7 @@
 """Opsora TUI — Codex-style terminal UI.
 
 Minimal, clean, fast. No panels. No boxes. Just content.
+Plus a bordered input box at the bottom (Codex-style).
 """
 
 from __future__ import annotations
@@ -16,6 +17,21 @@ from rich.markdown import Markdown
 from rich.spinner import Spinner
 from rich.syntax import Syntax
 from rich.text import Text
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.application import Application
+from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.filters import HasFocus
+from prompt_toolkit.formatted_text import FormattedText
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout.containers import HSplit, Window, VSplit
+from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.layout.layout import Layout
+from prompt_toolkit.layout.processors import PasswordProcessor
+from prompt_toolkit.styles import Style as PTStyle
+from prompt_toolkit.widgets import SearchToolbar
 
 console = Console(soft_wrap=True)
 
@@ -323,6 +339,110 @@ def render_help() -> None:
 # ---------------------------------------------------------------------------
 # Welcome — Codex-style minimal
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Codex-style Bordered Input Box
+# ---------------------------------------------------------------------------
+
+def codex_prompt(
+    provider: str = "alibaba",
+    model: str = "qwen-plus",
+    approval: str = "full-auto",
+    ctx_pct: int = 0,
+    tokens: int = 0,
+    completer=None,
+) -> str:
+    """Codex-style bordered input box at terminal bottom.
+
+    Layout:
+        ──────────────────────────
+         ❯ [user types here]
+        opsora  model  ctx%  mode
+    """
+    import sys as _sys
+
+    # Fallback for piped/non-TTY input
+    if not _sys.stdin.isatty():
+        try:
+            return input()
+        except (EOFError, KeyboardInterrupt):
+            return "__EXIT__"
+
+    buf = Buffer(name="input", completer=completer)
+
+    # Top border line
+    top_border = FormattedTextControl(
+        FormattedText([("fg:#444444", "  ─" + "─" * 50)])
+    )
+
+    # Prompt prefix + input
+    prompt_prefix = FormattedTextControl(
+        FormattedText([
+            ("fg:#00aaaa bold", "  ❯ "),
+        ])
+    )
+
+    # Bottom status bar
+    status_text = FormattedText([
+        ("fg:#555555", f"  opsora  {provider}:{model}"),
+        ("fg:#444444", f"  {100 - ctx_pct}% ctx"),
+        ("fg:#444444", f"  {approval}"),
+        ("fg:#444444", f"  {tokens} tok" if tokens else ""),
+    ])
+    status_bar_ctrl = FormattedTextControl(status_text)
+
+    # Key bindings
+    kb = KeyBindings()
+
+    @kb.add("enter")
+    def _submit(event):
+        event.app.exit(result=buf.text)
+
+    @kb.add("c-c")
+    def _cancel(event):
+        event.app.exit(result="__INTERRUPT__")
+
+    @kb.add("c-d")
+    def _exit(event):
+        if not buf.text:
+            event.app.exit(result="__EXIT__")
+
+    @kb.add("c-a")
+    def _cycle_mode(event):
+        # Delegate to external handler
+        new_mode = cycle_approval_mode()
+        event.app.invalidate()
+
+    # Build layout — Codex-style bordered box
+    layout = Layout(HSplit([
+        # Spacer (pushes input to bottom of visible area)
+        Window(height=Dimension.exact(0)),
+        # Top border
+        Window(content=top_border, height=Dimension.exact(1)),
+        # Input line: prefix + buffer
+        VSplit([
+            Window(content=prompt_prefix, width=Dimension.exact(5)),
+            Window(content=BufferControl(buffer=buf, focusable=True), height=Dimension.exact(1)),
+        ], height=Dimension.exact(1)),
+        # Bottom status bar
+        Window(content=status_bar_ctrl, height=Dimension.exact(1)),
+    ]))
+
+    style = PTStyle.from_dict({
+        "bottom-toolbar": "fg:#555555",
+    })
+
+    app = Application(
+        layout=layout,
+        key_bindings=kb,
+        style=style,
+        full_screen=False,
+        mouse_support=False,
+    )
+
+    result = app.run()
+    return result or ""
+
 
 def print_welcome(model: str, tools_count: int, approval: ApprovalMode) -> None:
     console.print()

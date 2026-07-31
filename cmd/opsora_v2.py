@@ -45,6 +45,7 @@ from rich.spinner import Spinner
 from opsora_tui import (
     ApprovalMode,
     StatusBar,
+    codex_prompt,
     console,
     cycle_approval_mode,
     get_approval_mode,
@@ -1410,36 +1411,34 @@ def main():
     session_id = hashlib.sha256(f"{time.time()}".encode()).hexdigest()[:12]
     history: list[dict] = []
 
-    # Prompt setup
-    kb = KeyBindings()
-
-    @kb.add("c-a")
-    def _cycle_mode(event):
-        new_mode = cycle_approval_mode()
-        set_approval_mode(new_mode)
-        status_bar.approval_mode = new_mode
-        event.app.invalidate()
-
-    completions = WordCompleter(
+    # Completer for slash commands
+    from prompt_toolkit.completion import WordCompleter as WC
+    completer = WC(
         ["/help", "/status", "/models", "/tools", "/mode", "/tree", "/sessions", "/resume",
-         "/save", "/new", "/run", "/read", "/diff", "/memory", "/mcp", "/agent", "/clear", "/exit"],
+         "/save", "/new", "/run", "/read", "/diff", "/memory", "/mcp", "/agent", "/clear", "/exit",
+         "/review", "/deploy", "/explain", "/refactor", "/test", "/fix-ci",
+         "/cost", "/copy", "/fork"],
         ignore_case=True,
-    )
-
-    session = PromptSession(
-        message=lambda: [
-            ("fg:cyan bold", "opsora "),
-            ("fg:ansibrightblack", f"{selection.provider}:{selection.model} "),
-            ("fg:ansiyellow", "❯ "),
-        ],
-        key_bindings=kb,
-        completer=completions,
-        style=PromptStyle.from_dict({"prompt": "bold cyan"}),
     )
 
     while True:
         try:
-            prompt_text = session.prompt().strip()
+            # Codex-style bordered input box
+            prompt_text = codex_prompt(
+                provider=selection.provider,
+                model=selection.model,
+                approval=get_approval_mode().value,
+                ctx_pct=status_bar.context_pct,
+                tokens=status_bar.session_tokens,
+                completer=completer,
+            ).strip()
+
+            # Handle special results
+            if prompt_text == "__INTERRUPT__":
+                console.print(Text("\n  /exit untuk keluar", style="dim"))
+                continue
+            if prompt_text == "__EXIT__":
+                break
             if not prompt_text:
                 continue
 

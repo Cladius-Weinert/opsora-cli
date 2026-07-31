@@ -29,6 +29,8 @@ def _get_conn() -> sqlite3.Connection:
 def add_memory(text: str, source: str = "cli") -> str:
     if not text or not text.strip():
         return "Memory text cannot be empty."
+    if len(text.strip()) > 4096:
+        return "Memory text too long (max 4096 chars)."
     conn = _get_conn()
     try:
         conn.execute(
@@ -37,6 +39,10 @@ def add_memory(text: str, source: str = "cli") -> str:
         )
         conn.commit()
         return f"Saved to memory: {text.strip()[:120]}"
+    except sqlite3.IntegrityError as e:
+        return f"Database error: {e}"
+    except Exception as e:
+        return f"Unexpected error: {e}"
     finally:
         conn.close()
 

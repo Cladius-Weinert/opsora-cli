@@ -171,23 +171,22 @@ class StatusBar:
 # ---------------------------------------------------------------------------
 
 
-def stream_markdown(text: str, speed: float = 0.012) -> None:
-    """Stream markdown text word-by-word with Rich Live display."""
+def stream_markdown(text: str, speed: float = 0.010) -> None:
+    """Stream markdown text word-by-word — like Claude Code / Codex."""
     if not text or not text.strip():
         return
     words = text.split(" ")
     out = ""
     try:
-        with Live(refresh_per_second=30, auto_refresh=True, transient=False) as live:
+        with Live(refresh_per_second=30, auto_refresh=True, transient=True) as live:
             for word in words:
                 out += word + " "
                 live.update(Markdown(out))
                 time.sleep(speed)
-        console.print()
+        # Final render (transient cleared the live, so print once clean)
+        console.print(Markdown(out.strip()))
     except Exception:
-        # Fallback: just print without streaming if Live fails
         console.print(Markdown(text))
-        console.print()
 
 
 def stream_text_raw(text: str, speed: float = 0.008) -> None:
@@ -230,11 +229,11 @@ def render_tool_call(name: str, args: dict[str, Any], output: str) -> None:
     if not output or output.strip() == "":
         return
 
-    # Smart truncation — longer for file reads, shorter for commands
-    max_len = 2000 if name in ("read_file", "grep_search") else 1200
+    # Smart truncation — generous for file reads, moderate for commands
+    max_len = 5000 if name == "read_file" else 3000 if name == "grep_search" else 1500
     truncated = output
     if len(output) > max_len:
-        truncated = output[:max_len] + f"\n… ({len(output) - max_len} chars lagi)"
+        truncated = output[:max_len] + f"\n… {len(output) - max_len} chars lagi (file panjang)"
 
     # Syntax highlight for file content
     if name in ("read_file", "write_file", "edit_file"):

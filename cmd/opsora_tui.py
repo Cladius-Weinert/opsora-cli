@@ -207,7 +207,7 @@ def stream_text_raw(text: str, speed: float = 0.008) -> None:
 
 
 def render_tool_call(name: str, args: dict[str, Any], output: str) -> None:
-    """Render a tool call — one line header + output panel (no duplicate name)."""
+    """Render a tool call — Claude Code style: minimal, no panels, inline output."""
     icons = {
         "read_file": "📄", "write_file": "✏️", "edit_file": "🔧",
         "run_command": "💻", "aws_command": "☁️", "memory_add": "🧠",
@@ -217,38 +217,37 @@ def render_tool_call(name: str, args: dict[str, Any], output: str) -> None:
     }
     icon = icons.get(name, "⚙")
 
-    # Compact args line
-    args_short = ", ".join(f"{v}" if len(str(v)) < 30 else f"{str(v)[:27]}…" for v in args.values())
-    if len(args_short) > 60:
-        args_short = args_short[:57] + "…"
+    # Build compact args string — just values, no keys
+    args_parts = []
+    for k, v in args.items():
+        sv = str(v)
+        if len(sv) > 40:
+            sv = sv[:37] + "…"
+        args_parts.append(sv)
+    args_short = ", ".join(args_parts)
 
-    # Use Text() to avoid Rich markup parsing on args values
-    header = Text(f"  {icon} {name}({args_short})", style="dim yellow")
-    console.print(header)
+    # One-line header: icon name(args)
+    console.print(Text(f"  {icon} {name}({args_short})", style="dim yellow"))
 
     if not output or output.strip() == "":
         return
 
-    # Smart truncation — generous for file reads, moderate for commands
-    max_len = 5000 if name == "read_file" else 3000 if name == "grep_search" else 1500
-    truncated = output
-    if len(output) > max_len:
-        truncated = output[:max_len] + f"\n… {len(output) - max_len} chars lagi (file panjang)"
+    # Truncate
+    max_len = 4000 if name == "read_file" else 2000
+    truncated = output.strip()
+    if len(truncated) > max_len:
+        truncated = truncated[:max_len] + f"\n  … {len(output) - max_len} chars lagi"
 
-    # Syntax highlight for file content
+    # For file content: syntax highlight inline (no panel border)
     if name in ("read_file", "write_file", "edit_file"):
         lang = _detect_language(args.get("filepath", ""))
-        console.print(Panel(
-            Syntax(truncated, lang, theme="monokai", line_numbers=False, word_wrap=True),
-            border_style="dim yellow",
-            box=box.SIMPLE,
-        ))
+        # Indent each line for visual grouping
+        indented = "\n".join(f"    {line}" for line in truncated.split("\n"))
+        console.print(Syntax(indented, lang, theme="monokai", word_wrap=True))
     else:
-        console.print(Panel(
-            Text(truncated),
-            border_style="dim yellow",
-            box=box.SIMPLE,
-        ))
+        # For other tools: indented plain text
+        indented = "\n".join(f"    {line}" for line in truncated.split("\n"))
+        console.print(Text(indented, style="dim"))
 
 
 def _detect_language(filepath: str) -> str:

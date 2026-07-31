@@ -16,7 +16,10 @@ from urllib.request import urlopen
 
 import boto3
 from botocore.config import Config
-from openai import OpenAI
+try:
+    from openai import OpenAI
+except (ImportError, Exception):
+    from openai_lite import OpenAI
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.styles import Style as PromptStyle
@@ -29,7 +32,10 @@ from rich.table import Table
 from rich.text import Text
 
 
-WORKSPACE_ROOT = Path("/home/ubuntu")
+WORKSPACE_ROOT = Path("/root")
+_CMD_DIR = str(Path(__file__).resolve().parent)
+if _CMD_DIR not in sys.path:
+    sys.path.insert(0, _CMD_DIR)
 if str(WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKSPACE_ROOT))
 

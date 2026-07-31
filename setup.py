@@ -46,11 +46,9 @@ setup(
     py_modules=["opsora_v2"],
     package_dir={"": "cmd"},
     install_requires=[
-        "openai>=1.0.0",
         "rich>=13.0.0",
         "prompt-toolkit>=3.0.0",
         "boto3>=1.28.0",
-        "requests>=2.28.0",
     ],
     extras_require={
         "dev": [

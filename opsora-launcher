@@ -2,4 +2,4 @@
 # Stable global launcher for the local Opsora implementation.
 set -euo pipefail
 
-exec /home/ubuntu/.local/bin/opsora "$@"
+exec /root/.local/bin/opsora "$@"

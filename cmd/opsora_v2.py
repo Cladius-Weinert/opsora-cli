@@ -528,17 +528,192 @@ def call_with_fallback(messages: list[dict], selection: Selection, use_tools: bo
 # ============================================================================
 
 
+# ============================================================================
+# Context Compression — summarize old messages when context > 70%
+# ============================================================================
+
+def compress_context(messages: list[dict], selection: Selection) -> list[dict]:
+    """Summarize old tool call/result messages to free context space."""
+    total_chars = sum(len(str(m.get("content", ""))) for m in messages)
+    estimated_tokens = total_chars // 4
+    context_total = 32768
+
+    if estimated_tokens / context_total < 0.7:
+        return messages  # No compression needed
+
+    # Keep: system message, last 4 messages (most recent context), user messages
+    system_msgs = [m for m in messages if m.get("role") == "system"]
+    user_msgs = [m for m in messages if m.get("role") == "user"]
+    recent = messages[-6:]  # Keep last 6 messages intact
+
+    # Compress old tool results
+    compressed = list(system_msgs)
+    summary_parts = []
+    for m in messages:
+        if m in recent or m in system_msgs:
+            continue
+        role = m.get("role", "")
+        content = str(m.get("content", ""))
+        if role == "tool" and len(content) > 200:
+            summary_parts.append(f"[{m.get('name', 'tool')}: {content[:100]}…]")
+        elif role == "assistant" and m.get("tool_calls"):
+            for tc in m["tool_calls"]:
+                fn = tc.get("function", {})
+                summary_parts.append(f"[called {fn.get('name', '?')}]")
+        elif role == "assistant" and content:
+            compressed.append(m)  # Keep assistant text responses
+
+    if summary_parts:
+        compressed.append({
+            "role": "system",
+            "content": "Previous actions (compressed): " + "; ".join(summary_parts[:20]),
+        })
+
+    compressed.extend(recent)
+    return compressed
+
+
+# ============================================================================
+# Token & Cost Tracking
+# ============================================================================
+
+MODEL_COSTS = {
+    "qwen-plus": (0.40, 1.20),      # $/M input, $/M output
+    "qwen-turbo": (0.05, 0.20),
+    "qwen-max": (2.00, 6.00),
+    "meta/llama-3.1-70b-instruct": (0.35, 0.70),
+    "hy3": (0.132, 0.132),
+    "kimi-k3": (0.20, 0.60),
+    "deepseek-v4-flash": (0.02, 0.02),
+}
+
+def estimate_cost(model: str, input_chars: int, output_chars: int) -> tuple[int, float]:
+    """Return (total_tokens, cost_usd) for a response."""
+    input_tokens = input_chars // 4
+    output_tokens = output_chars // 4
+    total = input_tokens + output_tokens
+    costs = MODEL_COSTS.get(model, (0.30, 0.60))
+    cost = (input_tokens * costs[0] + output_tokens * costs[1]) / 1_000_000
+    return total, cost
+
+
+# ============================================================================
+# Error Recovery — auto-retry failed commands
+# ============================================================================
+
+def _try_error_recovery(name: str, args: dict, output: str, history: list[dict], selection: Selection) -> str:
+    """If a command failed, try to recover by asking the model for a fix."""
+    if name != "run_command":
+        return output
+
+    # Detect failure patterns
+    error_patterns = [
+        "command not found", "no such file", "module not found",
+        "importerror", "modulenotfounderror", "permission denied",
+        "error:", "traceback", "errno", "failed",
+    ]
+    output_lower = output.lower()
+    if not any(p in output_lower for p in error_patterns):
+        return output
+
+    # Auto-install: detect missing Python package
+    if "modulenotfounderror" in output_lower or "importerror" in output_lower:
+        import re
+        match = re.search(r"No module named '(\w+)'", output) or re.search(r"cannot import name.*from '(\w+)'", output)
+        if match:
+            pkg = match.group(1)
+            # Map common import names to pip package names
+            pkg_map = {"cv2": "opencv-python", "PIL": "Pillow", "sklearn": "scikit-learn", "yaml": "pyyaml", "bs4": "beautifulsoup4"}
+            pip_pkg = pkg_map.get(pkg, pkg)
+            console.print(f"  [dim cyan]⚡ auto-install: pip install {pip_pkg}[/dim]")
+            install_result = subprocess.run(
+                f"pip install --no-cache-dir {pip_pkg}", shell=True,
+                capture_output=True, text=True, timeout=120,
+            )
+            if install_result.returncode == 0:
+                # Retry the original command
+                retry = subprocess.run(
+                    str(args["command"]), shell=True,
+                    capture_output=True, text=True, timeout=120, cwd=WORKSPACE_ROOT,
+                )
+                retry_output = (retry.stdout or "") + (retry.stderr or "")
+                console.print(f"  [dim green]✓ {pip_pkg} installed, command retried[/dim]")
+                return retry_output[:TOOL_MAX_OUTPUT] or f"Retry exit code {retry.returncode}."
+
+    return output
+
+
+# ============================================================================
+# Auto-Diff — show diff after edit_file
+# ============================================================================
+
+def _auto_diff_after_edit(name: str, args: dict) -> None:
+    """After edit_file, show a compact diff of what changed."""
+    if name != "edit_file":
+        return
+    old_str = args.get("old_string", "")
+    new_str = args.get("new_string", "")
+    filepath = args.get("filepath", "")
+    if old_str and new_str and old_str != new_str:
+        render_file_edit(filepath, old_str, new_str)
+
+
+# ============================================================================
+# Session Auto-Title
+# ============================================================================
+
+def generate_session_title(history: list[dict], selection: Selection) -> str:
+    """Generate a concise session title from the first user message."""
+    for msg in history:
+        if msg.get("role") == "user":
+            content = msg.get("content", "")
+            if len(content) <= 50:
+                return content
+            # Ask model for a short title
+            try:
+                resp, _ = call_with_fallback(
+                    [{"role": "system", "content": "Generate a 3-6 word title for this conversation. Only output the title, nothing else."},
+                     {"role": "user", "content": content[:500]}],
+                    selection, use_tools=False,
+                )
+                msg_obj = resp.choices[0].message if hasattr(resp, "choices") else resp
+                title = (getattr(msg_obj, "content", "") or "").strip().strip('"').strip("'")
+                if title and len(title) < 60:
+                    return title
+            except Exception:
+                pass
+            return content[:50]
+    return "untitled"
+
+
+# ============================================================================
+# Agent Loop — ReAct with Activity Trail, Auto-Recovery, Compression
+# ============================================================================
+
 def run_agent_turn(history: list[dict], selection: Selection, status_bar: StatusBar) -> tuple[list[dict], Selection]:
-    for round_idx in range(TOOL_MAX_ROUNDS):
+    total_rounds = TOOL_MAX_ROUNDS
+    total_input_chars = 0
+    total_output_chars = 0
+
+    for round_idx in range(total_rounds):
         messages = [{"role": "system", "content": SYSTEM_PROMPT}, *history]
+
+        # Context compression when > 70%
+        messages = compress_context(messages, selection)
 
         # Update context estimate
         status_bar.context_used = sum(len(str(m.get("content", ""))) for m in messages) // 4
         status_bar.provider = selection.provider
         status_bar.model = selection.model
 
+        step_label = f"[{round_idx + 1}/{total_rounds}]"
+
         try:
-            with Live(Spinner("dots", text=f"[cyan]{selection.provider}:{selection.model} thinking…[/cyan]", style="cyan"), refresh_per_second=15, transient=True):
+            # Activity trail in spinner
+            with Live(
+                Spinner("dots", text=f"[cyan]{step_label} {selection.provider}:{selection.model}…[/cyan]", style="cyan"),
+                refresh_per_second=15, transient=True,
+            ):
                 response, selection = call_with_fallback(messages, selection, use_tools=True)
 
             msg = response.choices[0].message if hasattr(response, "choices") else response
@@ -548,40 +723,62 @@ def run_agent_turn(history: list[dict], selection: Selection, status_bar: Status
             content = getattr(msg, "content", None) or ""
             tool_calls = getattr(msg, "tool_calls", None)
 
+            # Track tokens
+            total_input_chars += sum(len(str(m.get("content", ""))) for m in messages)
+            total_output_chars += len(content)
+
             # Stream text response
             if content:
                 console.print()
                 stream_markdown(content)
-                console.print()
 
             # Handle tool calls
             if tool_calls:
-                for tc in tool_calls:
+                n_tools = len(tool_calls)
+                for ti, tc in enumerate(tool_calls, 1):
                     fn = tc.function if hasattr(tc, "function") else tc.get("function", {})
                     name = fn.name if hasattr(fn, "name") else fn.get("name", "")
                     args_raw = fn.arguments if hasattr(fn, "arguments") else fn.get("arguments", "{}")
                     args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
 
-                    # Render tool call
-                    with Live(Spinner("dots", text=f"[yellow]⚙ {name}…[/yellow]", style="yellow"), refresh_per_second=15, transient=True):
+                    # Activity trail: show which tool step we're on
+                    tool_step = f"[cyan]{step_label} {ti}/{n_tools}[/cyan]" if n_tools > 1 else step_label
+
+                    with Live(
+                        Spinner("dots", text=f"[yellow]{tool_step} {name}…[/yellow]", style="yellow"),
+                        refresh_per_second=15, transient=True,
+                    ):
                         output = execute_tool(name, args)
 
+                    # Auto-recovery for failed commands
+                    output = _try_error_recovery(name, args, output, history, selection)
+
+                    # Render tool output
                     render_tool_call(name, args, output)
+                    total_output_chars += len(output)
+
+                    # Auto-diff after file edits
+                    _auto_diff_after_edit(name, args)
 
                     tc_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
                     history.append({"role": "tool", "tool_call_id": tc_id, "content": output})
 
+                console.print()
                 continue  # next round for tool results
             else:
                 # Self-reflection: if response seems incomplete, do one more pass
                 if content and round_idx == 0 and len(content) < 50 and any(kw in content.lower() for kw in ["i need", "let me", "i should", "saya akan", "mari"]):
-                    history.append({"role": "user", "content": "Continue with the implementation."})
+                    history.append({"role": "user", "content": "Lanjutin."})
                     continue
                 break
 
         except Exception as e:
-            console.print(f"[red]✗ Error: {e}[/red]")
+            console.print(Text(f"✗ {e}", style="red"))
             break
+
+    # Token/cost summary
+    total_tokens, cost = estimate_cost(selection.model, total_input_chars, total_output_chars)
+    console.print(f"  [dim]{status_bar.context_pct}% ctx · {total_tokens} tok · ${cost:.4f} · {get_approval_mode().value}[/dim]")
 
     return history, selection
 
@@ -827,44 +1024,15 @@ def _show_tools() -> None:
 def main():
     global _mcp_client, selection
 
-    # --- Non-interactive mode ---
+    # --- Non-interactive mode: reuse full agent loop ---
     if len(sys.argv) > 1:
         prompt = " ".join(sys.argv[1:])
         selection = auto_select_model(prompt)
         history = [{"role": "user", "content": prompt}]
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}, *history]
-
         status_bar = StatusBar(provider=selection.provider, model=selection.model)
 
         try:
-            for _ in range(TOOL_MAX_ROUNDS):
-                with Live(Spinner("dots", text=f"[cyan]{selection.provider}:{selection.model} thinking…[/cyan]", style="cyan"), refresh_per_second=15, transient=True):
-                    response, selection = call_with_fallback(messages, selection, use_tools=True)
-
-                msg = response.choices[0].message if hasattr(response, "choices") else response
-                messages.append(msg.model_dump(exclude_none=True) if hasattr(msg, "model_dump") else {"role": "assistant", "content": getattr(msg, "content", "")})
-
-                content = getattr(msg, "content", None) or ""
-                tool_calls = getattr(msg, "tool_calls", None)
-
-                if content:
-                    stream_markdown(content, speed=0.008)
-
-                if not tool_calls:
-                    break
-
-                for tc in tool_calls:
-                    fn = tc.function if hasattr(tc, "function") else tc.get("function", {})
-                    name = fn.name if hasattr(fn, "name") else fn.get("name", "")
-                    args_raw = fn.arguments if hasattr(fn, "arguments") else fn.get("arguments", "{}")
-                    args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
-
-                    with Live(Spinner("dots", text=f"[yellow]⚙ {name}…[/yellow]", style="yellow"), refresh_per_second=15, transient=True):
-                        output = execute_tool(name, args)
-
-                    render_tool_call(name, args, output)
-                    tc_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
-                    messages.append({"role": "tool", "tool_call_id": tc_id, "content": output})
+            history, selection = run_agent_turn(history, selection, status_bar)
         except Exception as e:
             console.print(Text(f"Error: {e}", style="red"))
         return
@@ -962,13 +1130,12 @@ def main():
 
             history, selection = run_agent_turn(history, selection, status_bar)
 
-            # Auto-save session
+            # Auto-save session with AI-generated title
             if len(history) > 2:
-                title = history[0].get("content", "untitled")[:40]
+                title = generate_session_title(history[:4], selection)
                 save_session(session_id, title, selection.provider, selection.model, get_approval_mode().value, history)
 
             status_bar.session_tokens = sum(len(str(m.get("content", ""))) for m in history) // 4
-            console.print(f"  [dim]{status_bar.context_pct}% ctx · {status_bar.session_tokens} tok · {get_approval_mode().value}[/dim]")
 
         except KeyboardInterrupt:
             console.print("\n[dim]/exit untuk keluar[/dim]")
@@ -982,9 +1149,9 @@ def main():
     if _mcp_client:
         _mcp_client.disconnect_all()
 
-    # Final save
+    # Final save with auto-title
     if history:
-        title = history[0].get("content", "untitled")[:40]
+        title = generate_session_title(history[:4], selection)
         save_session(session_id, title, selection.provider, selection.model, get_approval_mode().value, history)
 
     console.print("\n[dim]Dah.[/dim]")

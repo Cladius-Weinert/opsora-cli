@@ -34,33 +34,27 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.styles import Style as PromptStyle
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.formatted_text import HTML
-from rich import box
 from rich.console import Console
 from rich.markdown import Markdown
-from rich.panel import Panel
 from rich.syntax import Syntax
-from rich.table import Table
 from rich.text import Text
 from rich.live import Live
 from rich.spinner import Spinner
-from rich.tree import Tree
 
 # Opsora modules
 from opsora_tui import (
     ApprovalMode,
     StatusBar,
-    TaskProgress,
     console,
     cycle_approval_mode,
     get_approval_mode,
     needs_approval,
+    print_welcome,
     prompt_approval,
-    render_diff,
     render_file_edit,
     render_file_tree,
     render_help,
     render_tool_call,
-    render_welcome,
     set_approval_mode,
     stream_markdown,
 )
@@ -852,7 +846,7 @@ def handle_command(value: str, history: list[dict], selection: Selection, status
         return False, None, None
 
     if cmd == "/help":
-        console.print(render_help())
+        render_help()
         return True, None, None
 
     if cmd == "/status":
@@ -871,7 +865,7 @@ def handle_command(value: str, history: list[dict], selection: Selection, status
         new_mode = cycle_approval_mode()
         set_approval_mode(new_mode)
         status_bar.approval_mode = new_mode
-        console.print(f"  Approval mode: {new_mode.label} — {new_mode.description}")
+        console.print(Text(f"  mode: {new_mode.value}", style="cyan"))
         return True, None, None
 
     if cmd == "/model":
@@ -881,32 +875,30 @@ def handle_command(value: str, history: list[dict], selection: Selection, status
                 models = [m.strip() for m in PROVIDER_MODELS.get(prov, "").split(",") if m.strip()]
                 model = parts[2] if len(parts) > 2 else (models[0] if models else None)
                 if model:
-                    console.print(f"[green]✓[/green] Switched to [bold]{prov}:{model}[/bold]")
+                    console.print(Text(f"  ✓ {prov}:{model}", style="green"))
                     return True, Selection(prov, model), None
-            console.print(f"[red]✗ Provider '{prov}' not available[/red]")
+            console.print(Text(f"  ✗ {prov} not available", style="red"))
         return True, None, None
 
     if cmd == "/tree":
         path = parts[1] if len(parts) > 1 else str(WORKSPACE_ROOT)
-        tree = render_file_tree(path)
-        console.print(tree)
+        render_file_tree(path)
         return True, None, None
 
     if cmd == "/sessions":
         sessions = list_sessions()
         if not sessions:
-            console.print("  [dim]No saved sessions.[/dim]")
+            console.print(Text("  no sessions.", style="dim"))
             return True, None, None
-        table = Table(title="💾 Sessions", box=box.ROUNDED, border_style="cyan")
-        table.add_column("ID", style="cyan")
-        table.add_column("Title")
-        table.add_column("Model")
-        table.add_column("Messages")
-        table.add_column("Updated")
+        console.print()
         for s in sessions:
             updated = datetime.fromtimestamp(s["updated_at"]).strftime("%m/%d %H:%M")
-            table.add_row(s["id"][:8], s["title"][:30], s["model"], str(s["token_count"]), updated)
-        console.print(table)
+            console.print(
+                Text(f"  {s['id'][:8]}", style="cyan"),
+                Text(f"  {s['title'][:30]}", style=""),
+                Text(f"  {s['model']}  {updated}", style="dim"),
+            )
+        console.print()
         return True, None, None
 
     if cmd == "/resume":
@@ -950,48 +942,49 @@ def handle_command(value: str, history: list[dict], selection: Selection, status
 
     if cmd == "/clear":
         console.clear()
-        console.print(render_welcome(selection.provider, selection.model, get_approval_mode(), len(SAFE_TOOLS), str(WORKSPACE_ROOT)))
+        print_welcome(selection.model, len(SAFE_TOOLS), get_approval_mode())
         return True, None, None
 
     if cmd == "/run":
         if len(parts) < 2:
-            console.print("[dim]Usage: /run <command>[/dim]")
+            console.print(Text("  usage: /run <command>", style="dim"))
             return True, None, None
         cmd_str = " ".join(parts[1:])
-        with Live(Spinner("dots", text=f"[yellow]Running: {cmd_str}[/yellow]", style="yellow"), refresh_per_second=15, transient=True):
-            output = execute_tool("run_command", {"command": cmd_str})
-        console.print(Panel(output[:5000], title=f"💻 {cmd_str}", border_style="yellow", box=box.ROUNDED))
+        output = execute_tool("run_command", {"command": cmd_str})
+        console.print(Text(f"  ▶ {cmd_str}", style="bold dim"))
+        console.print(Text(f"    {output[:5000]}", style="dim"))
         return True, None, None
 
     if cmd == "/read":
         if len(parts) < 2:
-            console.print("[dim]Usage: /read <filepath>[/dim]")
+            console.print(Text("  usage: /read <filepath>", style="dim"))
             return True, None, None
         output = execute_tool("read_file", {"filepath": parts[1]})
         lang = "python" if parts[1].endswith(".py") else "text"
-        console.print(Panel(Syntax(output[:5000], lang, theme="monokai", word_wrap=True), title=f"📄 {parts[1]}", border_style="cyan", box=box.ROUNDED))
+        console.print(Text(f"  📄 {parts[1]}", style="bold dim"))
+        console.print(Syntax(output[:5000], lang, theme="monokai", word_wrap=True))
         return True, None, None
 
     if cmd == "/diff":
         if len(parts) < 3:
-            console.print("[dim]Usage: /diff <file1> <file2>[/dim]")
+            console.print(Text("  usage: /diff <file1> <file2>", style="dim"))
             return True, None, None
         try:
             t1 = Path(parts[1]).read_text(encoding="utf-8")
             t2 = Path(parts[2]).read_text(encoding="utf-8")
-            render_diff(t1, t2, parts[1])
+            render_file_edit(parts[1], t1, t2)
         except Exception as e:
-            console.print(f"[red]{e}[/red]")
+            console.print(Text(f"  ✗ {e}", style="red"))
         return True, None, None
 
     if cmd == "/memory":
         query = " ".join(parts[1:]) if len(parts) > 1 else ""
         if not query:
-            console.print("[dim]Usage: /memory <query>[/dim]")
+            console.print(Text("  usage: /memory <query>", style="dim"))
             return True, None, None
-        with Live(Spinner("dots", text=f"[cyan]Searching memory…[/cyan]", style="cyan"), refresh_per_second=15, transient=True):
-            result = execute_tool("memory_search", {"query": query})
-        console.print(Panel(result[:5000], title=f"🔍 {query}", border_style="cyan", box=box.ROUNDED))
+        result = execute_tool("memory_search", {"query": query})
+        console.print(Text(f"  🔍 {query}", style="bold dim"))
+        console.print(Text(f"    {result[:5000]}", style="dim"))
         return True, None, None
 
     if cmd == "/mcp":
@@ -1017,41 +1010,40 @@ def handle_command(value: str, history: list[dict], selection: Selection, status
 
 
 def _show_status(selection: Selection, status_bar: StatusBar) -> None:
-    table = Table(title="⚡ Opsora Status", box=box.ROUNDED, border_style="cyan")
-    table.add_column("Component", style="cyan")
-    table.add_column("Status")
+    console.print()
     for prov in ["nvidia", "alibaba", "model_studio", "openai", "bedrock", "tokenhub", "opsora_api", "local"]:
         avail = is_provider_available(prov)
-        table.add_row(prov, "[green]● ready[/green]" if avail else "[red]○ offline[/red]")
-    table.add_row("approval", get_approval_mode().label)
-    table.add_row("tools", str(len(SAFE_TOOLS)))
-    table.add_row("mcp", str(len(_mcp_client.get_all_tools())) if _mcp_client else "not configured")
-    table.add_row("context", f"{status_bar.context_pct}% used")
-    console.print(table)
+        icon = "●" if avail else "○"
+        style = "green" if avail else "red dim"
+        console.print(Text(f"  {icon} {prov}", style=style))
+    console.print(Text(f"  mode: {get_approval_mode().value}  tools: {len(SAFE_TOOLS)}  ctx: {status_bar.context_pct}%", style="dim"))
+    if _mcp_client:
+        mcp_count = len(_mcp_client.get_all_tools())
+        console.print(Text(f"  mcp: {mcp_count} tools", style="dim"))
+    console.print()
 
 
 def _show_models() -> None:
-    table = Table(title="🧠 Provider Routes", box=box.ROUNDED, border_style="cyan")
-    table.add_column("Provider", style="cyan")
-    table.add_column("Models")
-    table.add_column("Status")
+    console.print()
     for prov in ["nvidia", "alibaba", "model_studio", "openai", "bedrock", "tokenhub", "opsora_api", "local"]:
         models = PROVIDER_MODELS.get(prov, "")
         avail = is_provider_available(prov)
-        table.add_row(prov, models, "[green]●[/green]" if avail else "[red]○[/red]")
-    console.print(table)
+        icon = "●" if avail else "○"
+        style = "green" if avail else "red dim"
+        console.print(Text(f"  {icon} {prov}", style=style), Text(f"  {models}", style="dim"))
+    console.print()
 
 
 def _show_tools() -> None:
-    table = Table(title="🔧 Tools", box=box.ROUNDED, border_style="cyan")
-    table.add_column("Tool", style="cyan")
-    table.add_column("Description")
+    console.print()
     for t in SAFE_TOOLS:
-        table.add_row(t["function"]["name"], t["function"]["description"][:60])
+        name = t["function"]["name"]
+        desc = t["function"]["description"][:50]
+        console.print(Text(f"  {name}", style="cyan"), Text(f"  {desc}", style="dim"))
     if _mcp_client:
         for mt in _mcp_client.get_all_tools():
-            table.add_row(mt.name, f"[dim]MCP[/dim] {mt.description[:50]}")
-    console.print(table)
+            console.print(Text(f"  {mt.name}", style="cyan"), Text(f"  mcp: {mt.description[:40]}", style="dim"))
+    console.print()
 
 
 # ============================================================================
@@ -1100,11 +1092,8 @@ def main():
         cwd=str(WORKSPACE_ROOT),
     )
 
-    # Welcome — minimal, no corporate fluff
-    console.print()
-    console.print(Text("opsora", style="bold cyan"), Text(f"  {selection.provider}:{selection.model}  ·  {len(SAFE_TOOLS)} tools  ·  {approval_mode.value}", style="dim"))
-    console.print(Text("  Ketik apa aja atau /help buat command. Ctrl+A ganti mode.", style="dim"))
-    console.print()
+    # Welcome
+    print_welcome(f"{selection.provider}:{selection.model}", len(SAFE_TOOLS), approval_mode)
 
     # Session
     import hashlib

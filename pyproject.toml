@@ -49,9 +49,10 @@ dev = [
     "mypy>=1.0",
 ]
 
-[project.scripts]
-opsora = "opsora_cmd.opsora_v2:main"
-opsora2 = "opsora_cmd.opsora_v2:main"
+# Catatan: launcher `opsora` disediakan lewat symlink /usr/local/bin/opsora ->
+# /opsora/opsora (shebang `env python3` = 3.12, semua deps tersedia). Entry
+# console-script pip DIHAPUS agar `pip install` tidak membuat launcher duplikat
+# yang memakai python lain (3.14) tanpa dependensi lengkap.
 
 [project.urls]
 Homepage = "https://github.com/opsora/opsora-cli"

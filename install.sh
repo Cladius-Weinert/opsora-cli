@@ -115,8 +115,8 @@ fi
 LAUNCHER
 chmod +x "$BIN_DIR/opsora"
 
-# Create opsora2 alias
-ln -sf "$BIN_DIR/opsora" "$BIN_DIR/opsora2"
+# Catatan: hanya SATU launcher `opsora` (tanpa alias opsora2) agar tidak ada
+# perintah duplikat yang membingungkan.
 
 # ── Environment config ────────────────────────────────────────
 

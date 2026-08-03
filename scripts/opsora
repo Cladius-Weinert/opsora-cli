@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""Opsora — Interactive AI Coding Assistant (multi-provider).
+
+Cara pakai (bisa dari direktori mana pun):
+    opsora                       # buka TUI interaktif
+    opsora "pertanyaan anda"     # one-shot, langsung jawab
+    cat file.py | opsora "review kode ini"
+
+Fallback klasik:  OPSORA_CLASSIC=1 opsora
+"""
+import os
+import sys
+from pathlib import Path
+
+# Path absolut → launcher bekerja dari direktori mana pun.
+OPSORA_HOME = "/root/opsora-cli"
+if OPSORA_HOME not in sys.path:
+    sys.path.insert(0, OPSORA_HOME)
+
+# Muat API keys / konfigurasi dari .opsora_env (jika ada).
+_ENV_FILE = Path("/root/.opsora_env")
+if _ENV_FILE.exists():
+    for _line in _ENV_FILE.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _key, _, _value = _line.partition("=")
+            os.environ.setdefault(_key.strip(), _value.strip())
+
+# Default env (tidak menimpa yang sudah diset user).
+os.environ.setdefault("OPSORA_WORKSPACE_ROOT", "/root")
+os.environ.setdefault(
+    "OPSORA_PROVIDER_ORDER", "nvidia,alibaba,bedrock,openai,tokenhub,local")
+
+# Mode interaktif butuh terminal; one-shot (ada argumen) tetap jalan tanpa TTY.
+if not sys.stdin.isatty() and len(sys.argv) < 2:
+    sys.stdout.write(
+        "Opsora butuh terminal untuk mode interaktif.\n"
+        'One-shot:  opsora "pertanyaan anda"\n'
+        'Pipe:      cat file | opsora "analisis ini"\n')
+    sys.exit(1)
+
+from opsora_cmd.opsora_v2 import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

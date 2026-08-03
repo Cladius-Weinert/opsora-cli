@@ -58,6 +58,67 @@ class TuiBackend:
 
 
 # ---------------------------------------------------------------------------
+# Thinking / loading indicator (Qwen Code style)
+# ---------------------------------------------------------------------------
+
+class ThinkingIndicator(Static):
+    """Animated spinner shown while a turn is running.
+
+    Stays mounted just above the input box; ``start``/``stop`` toggle its
+    visibility and a timer drives the spinner frames. The message updates live
+    (e.g. "Berpikir…" → "Menjalankan read_file…") so the user always sees what
+    Opsora is doing — the same affordance Qwen Code's thinking indicator gives.
+    """
+
+    SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def __init__(self, accent: str = "#00ffff", dim: str = "#8a8a9a",
+                 **kwargs: Any):
+        super().__init__("", **kwargs)
+        self._accent = accent
+        self._dim = dim
+        self._frame = 0
+        self._message = "Berpikir"
+        self._timer = None
+
+    def start(self, message: str = "Berpikir") -> None:
+        self._message = message
+        self._frame = 0
+        self._render_frame()
+        if self._timer is None:
+            self._timer = self.set_interval(0.09, self._advance)
+        self.display = True
+
+    def set_message(self, message: str) -> None:
+        self._message = message
+        self._render_frame()
+
+    def stop(self) -> None:
+        if self._timer is not None:
+            try:
+                self._timer.stop()
+            except Exception:
+                pass
+            self._timer = None
+        self.display = False
+
+    def on_unmount(self) -> None:
+        self.stop()
+
+    def _advance(self) -> None:
+        self._frame = (self._frame + 1) % len(self.SPINNER_FRAMES)
+        self._render_frame()
+
+    def _render_frame(self) -> None:
+        frame = self.SPINNER_FRAMES[self._frame]
+        t = Text()
+        t.append(f" {frame} ", style=f"bold {self._accent}")
+        t.append(self._message, style=f"{self._accent}")
+        t.append(" …", style=f"{self._dim}")
+        self.update(t)
+
+
+# ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
 
@@ -78,6 +139,11 @@ class OpsoraApp(App):
     #log {
         height: 1fr;
         border: none;
+        padding: 0 1;
+    }
+    #thinking {
+        height: 1;
+        margin: 0 1;
         padding: 0 1;
     }
     #inputbox {
@@ -108,13 +174,22 @@ class OpsoraApp(App):
     # -- layout --------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
+        t = self._theme
         yield Static(self._banner_renderable(), id="banner")
         yield RichLog(id="log", markup=True, wrap=True, highlight=True)
-        yield Input(placeholder="Tanya Opsora…  (Enter kirim · /help commands)", id="inputbox")
+        yield ThinkingIndicator(
+            accent=t.get("accent", "#00ffff"),
+            dim=t.get("dim", "#8a8a9a"),
+            id="thinking")
+        yield Input(
+            placeholder="Ketik pesan untuk Opsora…   Enter kirim · /help lihat perintah",
+            id="inputbox")
         yield Static(self._status_text(), id="statusbar")
 
     def on_mount(self) -> None:
         self._apply_widget_styles()
+        # Thinking indicator starts hidden; shown only while a turn runs.
+        self.query_one("#thinking", ThinkingIndicator).display = False
         self.query_one("#inputbox", Input).focus()
         log = self.query_one("#log", RichLog)
         log.write(self._welcome_renderable())
@@ -150,6 +225,9 @@ class OpsoraApp(App):
         inp.styles.color = fg
         inp.styles.border = ("tall", accent)
         inp.styles.caret_color = accent
+
+        thinking = self.query_one("#thinking", ThinkingIndicator)
+        thinking.styles.background = bg
 
         status = self.query_one("#statusbar", Static)
         status.styles.background = status_bg
@@ -221,10 +299,10 @@ class OpsoraApp(App):
         lines.append(Text(" └───────────────────────────────────────────────┘", style=border))
         lines.append(Text(""))
         lines.append(Text(
-            f" {b.tools_count} tools · {b.provider}:{b.model} · {b.approval} mode",
+            f" {b.tools_count} tools · {b.provider}:{b.model} · mode {b.approval}",
             style=dim))
         lines.append(Text(
-            " /help commands · /status detail · Ctrl+L clear · input selalu di bawah",
+            " /help perintah · /status detail · Ctrl+L bersihkan · ketik di bawah, jawaban di atas",
             style=dim))
         return Group(*lines)
 
@@ -232,6 +310,7 @@ class OpsoraApp(App):
         t = self._theme
         accent = t.get("accent", "#00ffff")
         dim = t.get("dim", "#8a8a9a")
+        success = t.get("success", "#00ff88")
         b = self.backend
         sb = b.status_bar
         try:
@@ -239,14 +318,12 @@ class OpsoraApp(App):
         except Exception:
             ctx = 0
         txt = Text()
-        txt.append(f" {b.provider}:{b.model}", style=f"bold {accent}")
-        txt.append("  │  ", style=dim)
-        txt.append(f"{100 - ctx}% ctx", style=dim)
-        txt.append("  │  ", style=dim)
+        txt.append(" ● ", style=f"bold {success}")
+        txt.append(f"{b.provider}:{b.model}", style=f"bold {accent}")
+        txt.append("   ", style=dim)
+        txt.append(f"{100 - ctx}% ctx tersisa", style=dim)
+        txt.append("   ", style=dim)
         txt.append(b.approval, style=dim)
-        if getattr(self, "_activity", ""):
-            txt.append("  │  ", style=dim)
-            txt.append(self._activity, style=dim)
         return txt
 
     # -- input handling ------------------------------------------------------
@@ -265,7 +342,13 @@ class OpsoraApp(App):
             return
 
         log = self.query_one("#log", RichLog)
-        log.write(Text(f"▸ {text}", style="bold cyan"))
+        accent = self._theme.get("accent", "#00ffff")
+        dim = self._theme.get("dim", "#8a8a9a")
+        log.write(Text(""))
+        umsg = Text()
+        umsg.append("❯ ", style=f"bold {accent}")
+        umsg.append(text, style="bold")
+        log.write(umsg)
         self.backend.history.append({"role": "user", "content": text})
 
         # Auto-select model per turn (mirrors classic REPL behaviour).
@@ -299,11 +382,11 @@ class OpsoraApp(App):
             return
         if cmd == "/help":
             self._append(Panel(
-                "[bold]/exit[/bold] keluar   [bold]/clear[/bold] bersihkan   "
-                "[bold]/status[/bold] detail   [bold]/help[/bold] bantuan\n"
-                "[dim]Ctrl+L clear · Ctrl+C interrupt · Ctrl+D keluar\n"
-                "Command lengkap tersedia di mode klasik: OPSORA_CLASSIC=1 opsora[/dim]",
-                title="Opsora commands", border_style="cyan"))
+                "[bold]/exit[/bold]  keluar        [bold]/clear[/bold]  bersihkan layar\n"
+                "[bold]/status[/bold]  detail        [bold]/help[/bold]  bantuan ini\n\n"
+                "[dim]Pintasan:  Ctrl+L bersihkan · Ctrl+C batalkan · Ctrl+D keluar\n"
+                "Perintah lengkap ada di mode klasik:  OPSORA_CLASSIC=1 opsora[/dim]",
+                title="Opsora — perintah", border_style="cyan"))
             return
         # Unknown slash command — hint to classic mode.
         self._append(Text(
@@ -315,7 +398,7 @@ class OpsoraApp(App):
     @work(thread=True, exclusive=True, group="turn")
     def _run_turn_worker(self) -> None:
         self._busy = True
-        self._set_activity("Berpikir…")
+        self.call_from_thread(self._thinking_start, "Berpikir")
         b = self.backend
 
         def emit(renderable: RenderableType) -> None:
@@ -323,7 +406,7 @@ class OpsoraApp(App):
             self.call_from_thread(self._append, renderable)
 
         def status(text: str) -> None:
-            self.call_from_thread(self._set_activity, text)
+            self.call_from_thread(self._thinking_message, text)
 
         try:
             history, selection = b.run_turn(
@@ -342,7 +425,7 @@ class OpsoraApp(App):
                                   Text(f"✗ {e}", style="bold red"))
         finally:
             self._busy = False
-            self.call_from_thread(self._set_activity, "")
+            self.call_from_thread(self._thinking_stop)
             self.call_from_thread(self._refresh_status)
             self.call_from_thread(self._refocus_input)
 
@@ -350,6 +433,24 @@ class OpsoraApp(App):
 
     def _append(self, renderable: RenderableType) -> None:
         self.query_one("#log", RichLog).write(renderable)
+
+    def _thinking_start(self, message: str = "Berpikir") -> None:
+        try:
+            self.query_one("#thinking", ThinkingIndicator).start(message)
+        except Exception:
+            pass
+
+    def _thinking_message(self, message: str) -> None:
+        try:
+            self.query_one("#thinking", ThinkingIndicator).set_message(message)
+        except Exception:
+            pass
+
+    def _thinking_stop(self) -> None:
+        try:
+            self.query_one("#thinking", ThinkingIndicator).stop()
+        except Exception:
+            pass
 
     def _set_activity(self, text: str) -> None:
         self._activity = text

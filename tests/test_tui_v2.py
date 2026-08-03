@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "opsora_cmd"))
 from rich.text import Text  # noqa: E402
 
 from opsora_tui_v2 import OpsoraApp, TuiBackend  # noqa: E402
+from opsora_tui_v2 import ThinkingIndicator  # noqa: E402
 from opsora_tui import get_provider_health, _gradient_steps  # noqa: E402
 
 
@@ -172,6 +173,60 @@ class TestSlashCommands:
             await pilot.pause(0.2)
             # Unknown slash commands must not trigger a turn.
             assert calls["run_turn"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Thinking indicator
+# ---------------------------------------------------------------------------
+
+class TestThinkingIndicator:
+    @pytest.mark.asyncio
+    async def test_thinking_hidden_on_mount(self):
+        backend, _ = _make_backend()
+        app = OpsoraApp(backend)
+        async with app.run_test(size=(100, 30)) as pilot:
+            thinking = app.query_one("#thinking", ThinkingIndicator)
+            assert thinking.display is False
+
+    @pytest.mark.asyncio
+    async def test_thinking_visible_while_running_then_hidden(self):
+        import threading
+        gate = threading.Event()
+        seen = {"visible_mid_run": False}
+
+        def slow_turn(history, selection, status_bar, emit, status):
+            status("Berpikir")
+            gate.wait(timeout=5)
+            return history, selection
+
+        backend, _ = _make_backend(run_turn=slow_turn)
+        app = OpsoraApp(backend)
+        async with app.run_test(size=(100, 30)) as pilot:
+            thinking = app.query_one("#thinking", ThinkingIndicator)
+            app.query_one("#inputbox").value = "halo"
+            await pilot.press("enter")
+            # While the turn is blocked, the indicator must be visible.
+            for _ in range(40):
+                if thinking.display:
+                    break
+                await pilot.pause(0.05)
+            seen["visible_mid_run"] = thinking.display
+            gate.set()
+            for _ in range(40):
+                if not thinking.display:
+                    break
+                await pilot.pause(0.05)
+            assert seen["visible_mid_run"] is True
+            assert thinking.display is False
+
+    def test_spinner_frames_advance(self):
+        ti = ThinkingIndicator()
+        ti._message = "Berpikir"
+        ti._frame = 0
+        f0 = ti.SPINNER_FRAMES[0]
+        ti._frame = 1
+        assert ti.SPINNER_FRAMES[1] != f0
+        assert len(ti.SPINNER_FRAMES) >= 8
 
 
 # ---------------------------------------------------------------------------

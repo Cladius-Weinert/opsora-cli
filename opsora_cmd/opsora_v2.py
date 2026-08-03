@@ -1746,7 +1746,7 @@ def run_turn_tui(history: list[dict], selection: Selection, status_bar: StatusBa
             _retry_delay = 2.0
             for _retry in range(_max_retries):
                 try:
-                    status(f"{selection.model} …")
+                    status("Berpikir")
                     response, selection = call_with_fallback(messages, selection, use_tools=True)
                     break
                 except (URLError, ConnectionError, TimeoutError, OSError) as e:
@@ -1768,7 +1768,11 @@ def run_turn_tui(history: list[dict], selection: Selection, status_bar: StatusBa
             total_output_chars += len(content)
             _cost_tracker.record(selection.model, extract_usage(response))
 
-            if content:
+            # Only surface content as the visible reply when the model is NOT
+            # also calling tools. Content that accompanies a tool call is the
+            # model's intermediate "thinking out loud"; showing it here would
+            # duplicate the final answer once the tool loop finishes.
+            if content and not tool_calls:
                 emit(Text(""))
                 emit(_Markdown(content))
 
@@ -1779,7 +1783,7 @@ def run_turn_tui(history: list[dict], selection: Selection, status_bar: StatusBa
                     args_raw = fn.arguments if hasattr(fn, "arguments") else fn.get("arguments", "{}")
                     args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
 
-                    status(f"🔧 {name}")
+                    status(f"Menjalankan {name}")
 
                     # Safety reflection before dangerous tools (same as classic).
                     if name in ("run_command", "write_file", "edit_file"):

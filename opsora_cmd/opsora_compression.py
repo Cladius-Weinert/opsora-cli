@@ -45,7 +45,7 @@ def _summarize_with_llm(messages: list[dict]) -> str | None:
         if m.get("tool_calls"):
             for tc in m["tool_calls"]:
                 fn = tc.get("function", {})
-                parts.append(f"[{role}] called {fn.get('name', '?')}({fn.get('arguments', '')[:150]})")
+                parts.append(f"[{role}] called {fn.get('name', '?')}({fn.get('arguments', '')[:150]}) id={tc.get('id', '?')}")
         if content:
             parts.append(f"[{role}] {content}")
     try:
@@ -61,14 +61,51 @@ def _summarize_with_llm(messages: list[dict]) -> str | None:
         return None
 
 def _truncate_fallback(messages: list[dict]) -> str:
-    """Simple truncation fallback when LLM summarization fails."""
+    """Simple truncation fallback when LLM summarization fails.
+
+    Preserves tool-call traceability: assistant tool_calls are rendered with
+    function name/args/id, and tool results are tagged with their
+    tool_call_id, so the summary keeps the call→result linkage.
+    """
     parts = []
     for m in messages:
+        role = m.get("role", "?")
+        if m.get("tool_calls"):
+            for tc in m["tool_calls"]:
+                fn = tc.get("function", {})
+                args = (fn.get("arguments") or "")[:100]
+                parts.append(f"[{role}] called {fn.get('name', '?')}({args}) id={tc.get('id', '?')}")
         content = (m.get("content") or "")[:200]
         if content:
-            parts.append(f"[{m.get('role', '?')}] {content}")
+            if role == "tool" and m.get("tool_call_id"):
+                parts.append(f"[{role}] (tool_call_id={m.get('tool_call_id')}) {content}")
+            else:
+                parts.append(f"[{role}] {content}")
     text = "\n".join(parts)
     return text[:600] + "… (truncated)" if len(text) > 600 else text
+
+def _tool_call_groups(messages: list[dict]) -> list[list[int]]:
+    """Identify atomic tool-call groups in the message list.
+
+    A group is an assistant message carrying ``tool_calls`` plus the run of
+    ``tool`` result messages immediately following it. A group must be kept
+    or compressed as a unit: compressing the assistant message while keeping
+    its tool results (or vice versa) orphans the ``tool_call_id`` and breaks
+    the chat-completions contract that every tool message must directly
+    follow the assistant tool_calls message it responds to.
+    """
+    groups: list[list[int]] = []
+    current: list[int] | None = None
+    for i, m in enumerate(messages):
+        role = m.get("role", "")
+        if role == "assistant" and m.get("tool_calls"):
+            current = [i]
+            groups.append(current)
+        elif role == "tool" and current is not None:
+            current.append(i)
+        else:
+            current = None
+    return groups
 
 def compress(messages: list[dict], token_budget: int = 24000) -> list[dict]:
     """Compress conversation history to fit within token budget.
@@ -77,21 +114,47 @@ def compress(messages: list[dict], token_budget: int = 24000) -> list[dict]:
     1. Keep system messages intact
     2. Keep last 6 messages intact (most recent context)
     3. Keep all user messages (important context)
-    4. Summarize old assistant+tool messages via fast LLM
-    5. Fallback to truncation if LLM fails
+    4. Keep tool-call groups atomic: an assistant message with tool_calls and
+       its tool results are kept or summarized together, never split, so a
+       kept tool result never loses the assistant call that produced it
+    5. Summarize old assistant+tool messages via fast LLM
+    6. Fallback to truncation if LLM fails
     """
     if not messages:
         return messages
     if _messages_tokens(messages) <= int(token_budget * 0.7):
         return messages
+
+    # Atomic tool-call groups (assistant tool_calls + their tool results)
+    groups = _tool_call_groups(messages)
+    group_of: dict[int, int] = {}
+    for gid, idxs in enumerate(groups):
+        for i in idxs:
+            group_of[i] = gid
+
+    recent_start = max(0, len(messages) - 6)
+
+    def _keep_single(i: int, m: dict) -> bool:
+        role = m.get("role", "")
+        return i >= recent_start or role == "user"
+
+    # A tool-call group stays intact if ANY member would be kept (e.g. its
+    # result falls inside the recent window); otherwise the whole group is
+    # summarized together so no tool_call_id is orphaned.
+    group_keep: dict[int, bool] = {
+        gid: any(_keep_single(i, messages[i]) for i in idxs)
+        for gid, idxs in enumerate(groups)
+    }
+
     # Split into categories
     system_msgs, keep_msgs, compress_msgs = [], [], []
-    recent_start = max(0, len(messages) - 6)
     for i, m in enumerate(messages):
         role = m.get("role", "")
         if role == "system":
             system_msgs.append(m)
-        elif i >= recent_start or role == "user":
+        elif i in group_of:
+            (keep_msgs if group_keep[group_of[i]] else compress_msgs).append(m)
+        elif _keep_single(i, m):
             keep_msgs.append(m)
         else:
             compress_msgs.append(m)

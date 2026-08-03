@@ -413,13 +413,144 @@ class TestSelectBestModel:
         assert provider == "alibaba"
         assert model == "qwen-plus"
 
-    def test_skips_models_without_required_capability(self):
+    def test_raises_when_no_model_has_required_capability(self):
+        # Fail loudly, not silently: a vision requirement with no vision
+        # model must raise, never fall back to a text-only model.
         available = {"nvidia": ["meta/llama-3.1-70b-instruct"]}
+        with pytest.raises(opsora_routing.NoCapableModelError):
+            opsora_routing._select_best_model(
+                "vision", available, required_capability="vision"
+            )
+
+
+class TestCapabilityAwareness:
+    """Capability map, aliases, and hard-filter behavior (Phase 1 task 11)."""
+
+    def test_model_has_capability_vision(self):
+        assert opsora_routing.model_has_capability("meta/llama-3.2-11b-vision-instruct", "vision")
+        assert opsora_routing.model_has_capability("nvidia/neva-22b", "vision")
+        assert not opsora_routing.model_has_capability("meta/llama-3.1-70b-instruct", "vision")
+
+    def test_model_has_capability_coding_aliases(self):
+        # "code", "coding" are aliases of the same capability
+        assert opsora_routing.model_has_capability("qwen3-coder-flash", "coding")
+        assert opsora_routing.model_has_capability("qwen3-coder-flash", "code")
+        assert opsora_routing.model_has_capability("deepseek-ai/deepseek-coder-6.7b", "coding")
+        assert not opsora_routing.model_has_capability("qwen-plus", "coding")
+
+    def test_model_has_capability_unknown_literal_fallback(self):
+        # Unknown capability strings keep legacy literal-substring semantics
+        assert opsora_routing.model_has_capability("qwen-max", "max")
+        assert not opsora_routing.model_has_capability("qwen-plus", "max")
+
+    def test_capability_filter_uses_keywords_not_literal_name(self):
+        # Regression: the old filter matched the literal capability string
+        # against the model name, so required_capability="coding" wrongly
+        # rejected "qwen3-coder-flash" (contains "coder", not "coding").
         provider, model = opsora_routing._select_best_model(
-            "vision", available, required_capability="vision"
+            "code", {"alibaba": ["qwen3-coder-flash"]}, required_capability="coding"
         )
-        # Should skip since no vision model available
-        assert provider == "alibaba"  # fallback
+        assert (provider, model) == ("alibaba", "qwen3-coder-flash")
+
+    def test_vision_intent_derives_hard_capability_requirement(self):
+        # A vision prompt with no vision model available must fail loudly
+        with pytest.raises(opsora_routing.NoCapableModelError):
+            opsora_routing.route(
+                "analyze this image",
+                available_providers={"nvidia": ["meta/llama-3.1-70b-instruct"]},
+            )
+
+    def test_vision_intent_still_routes_to_vision_model(self):
+        provider, model = opsora_routing.route(
+            "analyze this image",
+            available_providers={"nvidia": ["meta/llama-3.2-11b-vision-instruct",
+                                            "meta/llama-3.1-70b-instruct"]},
+        )
+        assert provider == "nvidia"
+        assert "vision" in model.lower()
+
+    def test_no_capability_constraint_keeps_legacy_behavior(self):
+        # Non-vision intents impose no hard filter — general models remain
+        # eligible and nothing raises.
+        provider, model = opsora_routing.route(
+            "hello there, how are you today?",
+            available_providers={"nvidia": ["meta/llama-3.1-70b-instruct"]},
+        )
+        assert (provider, model) == ("nvidia", "meta/llama-3.1-70b-instruct")
+
+    def test_route_no_providers_with_capability_raises(self):
+        with pytest.raises(opsora_routing.NoCapableModelError):
+            opsora_routing.route(
+                "analyze this image",
+                available_providers={},
+                required_capability="vision",
+            )
+
+    def test_resolve_required_capability_explicit_wins(self):
+        assert opsora_routing.resolve_required_capability("fast", "vision") == "fast"
+        assert opsora_routing.resolve_required_capability(None, "vision") == "vision"
+        assert opsora_routing.resolve_required_capability(None, "code") is None
+        assert opsora_routing.resolve_required_capability(None, "general") is None
+
+
+class TestFallbackCandidates:
+    """Capability-aware fallback candidate selection (Phase 1 task 11)."""
+
+    def test_vision_fallback_filters_incapable_models(self):
+        cands = opsora_routing.fallback_candidates(
+            "analyze this screenshot",
+            available_providers={
+                "nvidia": ["meta/llama-3.2-11b-vision-instruct", "meta/llama-3.1-70b-instruct"],
+                "alibaba": ["qwen-plus"],
+            },
+        )
+        # Only the vision-capable model survives the filter
+        assert cands == [("nvidia", "meta/llama-3.2-11b-vision-instruct")]
+
+    def test_excludes_failed_pairs(self):
+        cands = opsora_routing.fallback_candidates(
+            "write a function to parse CSV",
+            available_providers={
+                "alibaba": ["qwen3-coder-flash", "qwen3-coder-plus"],
+            },
+            exclude=[("alibaba", "qwen3-coder-flash")],
+        )
+        assert ("alibaba", "qwen3-coder-flash") not in cands
+        assert ("alibaba", "qwen3-coder-plus") in cands
+
+    def test_raises_when_no_capable_fallback_after_exclusions(self):
+        # The only vision model already failed → must fail loudly
+        with pytest.raises(opsora_routing.NoCapableModelError):
+            opsora_routing.fallback_candidates(
+                "analyze this screenshot",
+                available_providers={
+                    "nvidia": ["meta/llama-3.2-11b-vision-instruct", "meta/llama-3.1-70b-instruct"],
+                },
+                exclude=[("nvidia", "meta/llama-3.2-11b-vision-instruct")],
+            )
+
+    def test_no_capability_constraint_returns_all_non_excluded(self):
+        cands = opsora_routing.fallback_candidates(
+            "hello there, how are you today?",
+            available_providers={
+                "alibaba": ["qwen-plus"],
+                "nvidia": ["meta/llama-3.1-70b-instruct"],
+            },
+        )
+        assert set(cands) == {("alibaba", "qwen-plus"), ("nvidia", "meta/llama-3.1-70b-instruct")}
+
+    def test_explicit_capability_overrides_intent(self):
+        # Prompt classifies as code, but caller demands fast capability
+        cands = opsora_routing.fallback_candidates(
+            "write a function to parse CSV",
+            available_providers={
+                "alibaba": ["qwen3-coder-flash", "qwen-turbo", "qwen-plus"],
+            },
+            required_capability="fast",
+        )
+        models = [m for _, m in cands]
+        assert "qwen-turbo" in models
+        assert "qwen-plus" not in models
 
 
 if __name__ == "__main__":

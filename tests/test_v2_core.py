@@ -13,6 +13,19 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "opsora_cmd"))
 import opsora_v2
 
 
+@pytest.fixture(autouse=True)
+def _reset_opsora_globals():
+    """Reset opsora_v2 module-level state before every test.
+
+    Phase 1 (architect task 8): lazily-created provider clients, the health
+    cache, cost/plugin singletons and session state otherwise leak between
+    tests. NOTE: this fixture should move to tests/conftest.py once the
+    concurrent conftest work lands, so it covers the whole suite.
+    """
+    opsora_v2.reset_globals()
+    yield
+
+
 class TestSelection:
     """Tests for Selection dataclass."""
 
@@ -25,16 +38,17 @@ class TestSelection:
 class TestIsProviderAvailable:
     """Tests for is_provider_available function."""
 
-    def test_known_providers(self):
-        with patch('opsora_v2.nvidia_client', None):
-            with patch('opsora_v2.alibaba_client', MagicMock()):
-                with patch('opsora_v2.model_studio_client', None):
-                    with patch('opsora_v2.openai_client', None):
-                        with patch('opsora_v2.bedrock_available', return_value=False):
-                            with patch('opsora_v2.tokenhub_client', None):
-                                with patch('opsora_v2.opsora_api_client', None):
-                                    assert opsora_v2.is_provider_available("alibaba") is True
-                                    assert opsora_v2.is_provider_available("nvidia") is False
+    def test_known_providers(self, monkeypatch):
+        # Availability is driven by API-key env vars plus a cached health
+        # check. Isolate all three: fake keys, no network, empty cache.
+        monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dashscope-key")
+        monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+        with patch.dict(opsora_v2._provider_health_cache, {}, clear=True):
+            with patch('opsora_v2._check_provider_health', return_value=True) as mock_health:
+                assert opsora_v2.is_provider_available("alibaba") is True
+                assert opsora_v2.is_provider_available("nvidia") is False
+        # alibaba had a key → health-checked once; nvidia had no key → skipped
+        mock_health.assert_called_once()
 
 
 class TestAutoSelectModel:
@@ -42,7 +56,9 @@ class TestAutoSelectModel:
 
     @pytest.fixture
     def mock_router(self):
-        with patch('opsora_v2.IntentRouter') as mock:
+        # IntentRouter is imported lazily inside auto_select_model from
+        # opsora_routing, so patch it at its source module.
+        with patch('opsora_routing.IntentRouter') as mock:
             router_instance = MagicMock()
             router_instance.classify.return_value = "code"
             mock.return_value = router_instance
@@ -140,38 +156,62 @@ class TestCompressContext:
 
     def test_compression_with_tool_messages(self):
         """Test compression summarizes tool messages."""
+        # 368k chars of tool output ≈ 92k tokens > 70% of the default
+        # 131k context window (unknown model), so compression triggers.
         messages = [
             {"role": "system", "content": "System prompt"},
             {"role": "user", "content": "First message"},
             {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "read_file"}}]},
-            {"role": "tool", "content": "x" * 500, "name": "read_file"},
+            {"role": "tool", "content": "x" * 368_000, "name": "read_file"},
             {"role": "assistant", "content": "Response"},
         ]
-        sel = opsora_v2.Selection("alibaba", "qwen-plus")
+        sel = opsora_v2.Selection("alibaba", "unknown-model")
 
-        # Force compression by using small context window
-        with patch('opsora_v2.compress_context') as mock_compress:
-            # Actually test the real function with small window
+        summarized = [
+            {"role": "system", "content": "System prompt"},
+            {"role": "system", "content": "Previous actions (compressed): [read_file output]"},
+            {"role": "assistant", "content": "Response"},
+        ]
+        # compress is imported lazily inside compress_context from
+        # opsora_compression, so patch it at its source module.
+        with patch('opsora_compression.compress', return_value=summarized) as mock_compress:
             result = opsora_v2.compress_context(messages, sel)
-            # Should keep system and recent messages
-            assert any(m.get("role") == "system" for m in result)
+
+        # LLM-compressed result is used when it is shorter than the input
+        assert result == summarized
+        # Should keep system and recent messages
+        assert any(m.get("role") == "system" for m in result)
+        assert len(result) < len(messages)
+        mock_compress.assert_called_once()
 
     def test_naive_fallback(self):
         """Test naive fallback when LLM compression fails."""
+        big_tool_output = "x" * 368_000
         messages = [
             {"role": "system", "content": "System"},
             {"role": "user", "content": "User msg"},
-            {"role": "tool", "content": "x" * 300, "name": "read_file"},
+            {"role": "tool", "content": big_tool_output, "name": "read_file"},
+            {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "grep_search"}}]},
+            {"role": "user", "content": "Follow-up 1"},
+            {"role": "assistant", "content": "Answer 1"},
+            {"role": "user", "content": "Follow-up 2"},
+            {"role": "assistant", "content": "Answer 2"},
+            {"role": "user", "content": "Follow-up 3"},
             {"role": "assistant", "content": "Response"},
         ]
-        sel = opsora_v2.Selection("alibaba", "qwen-plus")
+        sel = opsora_v2.Selection("alibaba", "unknown-model")
 
-        with patch('opsora_v2.compress') as mock_compress:
-            mock_compress.side_effect = Exception("LLM failed")
+        with patch('opsora_compression.compress', side_effect=Exception("LLM failed")):
             result = opsora_v2.compress_context(messages, sel)
 
         # Should have compressed
         assert len(result) <= len(messages)
+        # System message survives the naive fallback
+        assert any(m.get("role") == "system" and m.get("content") == "System" for m in result)
+        # Old oversized tool output is truncated, not carried verbatim
+        assert not any(big_tool_output in str(m.get("content", "")) for m in result)
+        # Old activity is collapsed into a summary entry
+        assert any("Previous actions (compressed)" in str(m.get("content", "")) for m in result)
 
 
 class TestEstimateCost:
@@ -278,11 +318,16 @@ class TestInvokeProvider:
         mock_response.choices = [MagicMock(message=mock_message)]
         mock_client.chat.completions.create.return_value = mock_response
 
-        with patch('opsora_v2.alibaba_client', mock_client):
+        # Clients are resolved lazily via getters — patch the getter so no
+        # real OpenAI client (or network call) is created.
+        with patch('opsora_v2.get_alibaba_client', return_value=mock_client):
             result = opsora_v2.invoke_provider("alibaba", "qwen-plus", [{"role": "user", "content": "Hi"}])
 
         assert result == mock_response
         mock_client.chat.completions.create.assert_called_once()
+        kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert kwargs["model"] == "qwen-plus"
+        assert kwargs["messages"] == [{"role": "user", "content": "Hi"}]
 
     def test_invoke_nvidia(self):
         """Test invoking NVIDIA provider."""
@@ -294,14 +339,18 @@ class TestInvokeProvider:
         mock_response.choices = [MagicMock(message=mock_message)]
         mock_client.chat.completions.create.return_value = mock_response
 
-        with patch('opsora_v2.nvidia_client', mock_client):
+        with patch('opsora_v2.get_nvidia_client', return_value=mock_client):
             result = opsora_v2.invoke_provider("nvidia", "nemotron", [{"role": "user", "content": "Hi"}])
 
         assert result == mock_response
+        mock_client.chat.completions.create.assert_called_once()
+        kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert kwargs["model"] == "nemotron"
+        assert kwargs["messages"] == [{"role": "user", "content": "Hi"}]
 
     def test_invoke_unavailable_provider(self):
         """Test invoking unavailable provider raises error."""
-        with patch('opsora_v2.alibaba_client', None):
+        with patch('opsora_v2.get_alibaba_client', return_value=None):
             with pytest.raises(RuntimeError, match="not available"):
                 opsora_v2.invoke_provider("alibaba", "qwen-plus", [])
 
@@ -318,8 +367,11 @@ class TestCallWithFallback:
         mock_message.tool_calls = None
         mock_response.choices = [MagicMock(message=mock_message)]
 
+        # No alternative providers available → only the first candidate is
+        # tried (also keeps the test clear of real health-check network calls).
         with patch('opsora_v2.invoke_provider', return_value=mock_response):
-            result, used_sel = opsora_v2.call_with_fallback([{"role": "user", "content": "Hi"}], sel)
+            with patch('opsora_v2.is_provider_available', return_value=False):
+                result, used_sel = opsora_v2.call_with_fallback([{"role": "user", "content": "Hi"}], sel)
 
         assert result == mock_response
         assert used_sel == sel
@@ -367,7 +419,11 @@ class TestGenerateSessionTitle:
         history = [{"role": "user", "content": "x" * 100}]
         sel = opsora_v2.Selection("alibaba", "qwen-plus")
 
-        title = opsora_v2.generate_session_title(history, sel)
+        # Model title generation fails → falls back to 50-char truncation.
+        # Patched so the test never touches the network.
+        with patch('opsora_v2.call_with_fallback', side_effect=Exception("API error")):
+            title = opsora_v2.generate_session_title(history, sel)
+
         assert len(title) == 50
 
     def test_title_from_model(self):

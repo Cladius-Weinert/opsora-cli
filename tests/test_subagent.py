@@ -205,6 +205,8 @@ class TestSubagentOrchestrator:
             mock_response.choices = [MagicMock(message=mock_message)]
             return mock_response
 
+        orchestrator.invoke_fn = mock_invoke
+
         result = orchestrator._run_task(task, "alibaba", "qwen-plus")
 
         assert result.task.status == "done"

@@ -35,6 +35,35 @@ def mock_env(monkeypatch):
 
 
 @pytest.fixture
+def orchestrator():
+    """SubagentOrchestrator wired with a mock invoke function.
+
+    Neutral dependencies: no network, no real providers. The fake
+    invoke_fn returns an OpenAI-style response with plain content and
+    no tool calls, so render/planning/execution helpers can be
+    exercised safely. Tests that need specific model behaviour should
+    replace ``orchestrator.invoke_fn`` with their own mock.
+    """
+    import opsora_subagent
+
+    def fake_invoke(provider, model, messages, use_tools=True):
+        response = MagicMock()
+        message = MagicMock()
+        message.content = "Task completed successfully"
+        message.tool_calls = None
+        message.model_dump.return_value = {"role": "assistant", "content": "Task completed successfully"}
+        response.choices = [MagicMock(message=message)]
+        return response
+
+    return opsora_subagent.SubagentOrchestrator(
+        invoke_fn=fake_invoke,
+        tools=[{"type": "function", "function": {"name": "read_file", "description": "Read a file"}}],
+        system_prompt="Test system prompt",
+        max_workers=2,
+    )
+
+
+@pytest.fixture
 def temp_workspace(tmp_path):
     """Create a temporary workspace with sample files."""
     # Create sample files

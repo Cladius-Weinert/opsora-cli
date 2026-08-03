@@ -5,7 +5,7 @@ resources, prompts, health checks, auto-reconnect. Sync only, stdlib only.
 """
 from __future__ import annotations
 
-import json, os, subprocess, threading, time
+import json, os, shlex, subprocess, threading, time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -85,8 +85,10 @@ class MCPClient_v2:
     def _connect_stdio(self, srv: MCPServer_v2) -> None:
         if not srv.command:
             return
+        # shlex.split honors quoted arguments ("python server.py --name 'my srv'")
+        # where str.split would mis-split inside the quotes.
         srv.process = subprocess.Popen(
-            srv.command.split(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            shlex.split(srv.command), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, env={**os.environ, **srv.env}, text=False, bufsize=0)
         threading.Thread(target=self._drain_stderr, args=(srv,), daemon=True).start()
         resp = self._send_stdio(srv, "initialize", {
@@ -172,6 +174,18 @@ class MCPClient_v2:
                 return self.call_tool(server_name, tool_name, arguments)
             return "Tool call gagal dan reconnect gagal."
         return self._extract_text(resp)
+
+    def call_tool_full(self, full_name: str, arguments: dict) -> str:
+        """Call a tool by its full ``mcp__<server>__<tool>`` name.
+
+        Compatibility entry point for callers (opsora_v2.execute_tool) that
+        only know the flattened OpenAI function name, not the server/tool
+        split.
+        """
+        parts = full_name.split("__", 2)
+        if len(parts) < 3 or parts[0] != "mcp" or not parts[1] or not parts[2]:
+            return f"Invalid MCP tool name: {full_name}"
+        return self.call_tool(parts[1], full_name, arguments)
 
     def read_resource(self, server_name: str, uri: str) -> str:
         srv = self._find_server(server_name)

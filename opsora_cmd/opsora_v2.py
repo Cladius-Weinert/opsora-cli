@@ -75,7 +75,7 @@ from opsora_session import (
     search_sessions,
 )
 from opsora_subagent import SubagentOrchestrator
-from opsora_mcp import MCPClient
+from opsora_mcp_v2 import MCPClient_v2
 from problem_solver import solve_problem
 # Phase 1: imported at module level (stdlib-only, no network at import time)
 # so slash-command handlers are patchable in tests via opsora_v2.<name>.
@@ -948,7 +948,7 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
 
         # --- MCP ---
         if name.startswith("mcp__"):
-            return _mcp_client.call_tool(name, args) if _mcp_client else f"MCP not initialized."
+            return _mcp_client.call_tool_full(name, args) if _mcp_client else f"MCP not initialized."
 
         return f"Unknown tool: {name}"
     except Exception as e:
@@ -1016,7 +1016,7 @@ SYSTEM_PROMPT = (
     "→ 'REST API dibuat di app/ dengan JWT auth, 5 endpoints, dan 12 passing tests.'\n"
 )
 
-_mcp_client: Optional[MCPClient] = None
+_mcp_client: Optional[MCPClient_v2] = None
 _current_todos: list[dict] = []
 _project_context: str = ""
 
@@ -2548,10 +2548,10 @@ def main():
     console.clear()
 
     # Init MCP (lazy - only connect when needed)
-    _mcp_client = MCPClient()
+    _mcp_client = MCPClient_v2()
     _mcp_client.load_config()
     # Don't auto-connect on startup - connect lazily when tools are needed
-    # _mcp_client.connect()  # Commented out for faster startup
+    # _mcp_client.connect_all()  # Commented out for faster startup
 
     # Initial state
     selection = Selection("alibaba", "qwen-plus")

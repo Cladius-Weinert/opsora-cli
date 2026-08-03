@@ -1,0 +1,15 @@
+{
+  "_comment": "Opsora CLI provider resilience settings (Phase 1, tasks 16-18). Env overrides: OPSORA_TIMEOUT, OPSORA_API_TIMEOUT, OPSORA_RETRY_MAX_ATTEMPTS, OPSORA_BREAKER_THRESHOLD, OPSORA_BREAKER_COOLDOWN, OPSORA_LOG_FILE, OPSORA_LOG_LEVEL.",
+  "timeout_seconds": 40,
+  "opsora_api_timeout_seconds": 120,
+  "retry": {
+    "max_attempts": 3,
+    "base_delay_seconds": 0.5,
+    "max_delay_seconds": 8.0,
+    "jitter_ratio": 0.25
+  },
+  "circuit_breaker": {
+    "failure_threshold": 5,
+    "cooldown_seconds": 60.0
+  }
+}

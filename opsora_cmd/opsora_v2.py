@@ -87,6 +87,19 @@ from opsora_nvidia import (
     generate_embedding,
     translate_text,
 )
+# Phase 1 (tasks 16-18): provider resilience — structured logging with
+# correlation ids, externalized timeouts, retry with backoff, circuit breaker.
+from opsora_resilience import (
+    CircuitOpenError,
+    all_breaker_status,
+    get_breaker,
+    get_config as get_resilience_config,
+    get_logger as get_structured_logger,
+    is_transient_error,
+    new_turn_correlation_id,
+    reset_breakers,
+    retry_with_backoff,
+)
 
 # v3.1 upgrades (lazy imports where possible for startup speed)
 # MODEL_COSTS/_DEFAULT_COST: single source of truth for pricing lives in
@@ -108,6 +121,8 @@ OPSORA_DIR.mkdir(exist_ok=True)
 # Configuration defaults
 DEFAULT_MAX_TOKENS = 4096
 DEFAULT_TEMPERATURE = 0.2
+# Phase 1 (task 17): kept as the documented fallback; provider getters read
+# the live value from config/resilience.json (get_resilience_config()).
 DEFAULT_TIMEOUT = 40
 MAX_CONTEXT_TOKENS = 131072
 
@@ -153,7 +168,7 @@ def get_nvidia_client() -> Optional[OpenAI]:
     if _nvidia_client is None:
         key = os.environ.get("NVIDIA_API_KEY")
         if key:
-            _nvidia_client = OpenAI(api_key=key, base_url="https://integrate.api.nvidia.com/v1", timeout=DEFAULT_TIMEOUT)
+            _nvidia_client = OpenAI(api_key=key, base_url="https://integrate.api.nvidia.com/v1", timeout=get_resilience_config().timeout_seconds)
     return _nvidia_client
 
 
@@ -163,7 +178,7 @@ def get_alibaba_client() -> Optional[OpenAI]:
         key = os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("OPENAI_API_KEY")
         if key:
             url = os.environ.get("ALIBABA_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
-            _alibaba_client = OpenAI(api_key=key, base_url=url, timeout=DEFAULT_TIMEOUT)
+            _alibaba_client = OpenAI(api_key=key, base_url=url, timeout=get_resilience_config().timeout_seconds)
     return _alibaba_client
 
 
@@ -175,7 +190,7 @@ def get_model_studio_client() -> Optional[OpenAI]:
             _model_studio_client = OpenAI(
                 api_key=key,
                 base_url="https://ws-u05t2ivr4fghrt6v.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
-                timeout=DEFAULT_TIMEOUT
+                timeout=get_resilience_config().timeout_seconds
             )
     return _model_studio_client
 
@@ -185,7 +200,7 @@ def get_openai_client() -> Optional[OpenAI]:
     if _openai_client is None:
         key = os.environ.get("OPENAI_API_KEY")
         if key:
-            _openai_client = OpenAI(api_key=key, timeout=DEFAULT_TIMEOUT)
+            _openai_client = OpenAI(api_key=key, timeout=get_resilience_config().timeout_seconds)
     return _openai_client
 
 
@@ -197,7 +212,7 @@ def get_tokenhub_client() -> Optional[OpenAI]:
             _tokenhub_client = OpenAI(
                 api_key=key,
                 base_url="https://tokenhub.tencentmaas.com/v1",
-                timeout=DEFAULT_TIMEOUT
+                timeout=get_resilience_config().timeout_seconds
             )
     return _tokenhub_client
 
@@ -211,7 +226,7 @@ def get_opsora_api_client() -> Optional[OpenAI]:
             _opsora_api_client = OpenAI(
                 api_key=token,
                 base_url=f"{url}/v1",
-                timeout=120
+                timeout=get_resilience_config().opsora_api_timeout_seconds
             )
     return _opsora_api_client
 
@@ -1056,6 +1071,25 @@ def load_project_context() -> str:
 
 
 def invoke_provider(provider: str, model: str, messages: list[dict], use_tools: bool = True) -> Any:
+    """Invoke a provider — THE choke point for provider-call resilience.
+
+    Phase 1 (tasks 16-18): every provider call flows through here, so this is
+    the single place where the circuit breaker gates the call, transient
+    errors are retried with exponential backoff + jitter, and structured log
+    events are emitted. Fatal errors (4xx auth/validation, unknown provider)
+    are never retried and never trip the breaker.
+    """
+    slog = get_structured_logger()
+    breaker = get_breaker(provider)
+    if not breaker.allow_request():
+        status = breaker.status()
+        slog.warning(
+            "provider_call_rejected",
+            provider=provider, model=model, reason="circuit_open",
+            retry_after_seconds=status["retry_after_seconds"],
+        )
+        raise CircuitOpenError(provider, retry_after=status["retry_after_seconds"])
+
     all_tools = list(SAFE_TOOLS)
     if _mcp_client:
         all_tools.extend(_mcp_client.to_openai_tools())
@@ -1065,40 +1099,82 @@ def invoke_provider(provider: str, model: str, messages: list[dict], use_tools: 
         if use_tools and all_tools:
             kwargs["tools"] = all_tools
             kwargs["tool_choice"] = "auto"
-        return client.chat.completions.create(**kwargs)
 
-    if provider == "nvidia" and get_nvidia_client():
-        return _call_openai(get_nvidia_client())
-    if provider == "alibaba" and get_alibaba_client():
-        return _call_openai(get_alibaba_client(), max_tokens=8192)
-    if provider == "model_studio" and get_model_studio_client():
-        return _call_openai(get_model_studio_client(), max_tokens=8192)
-    if provider == "openai" and get_openai_client():
-        return _call_openai(get_openai_client())
-    if provider == "tokenhub" and get_tokenhub_client():
-        return _call_openai(get_tokenhub_client(), max_tokens=8192)
-    if provider == "opsora_api" and get_opsora_api_client():
-        return _call_openai(get_opsora_api_client(), max_tokens=8192)
-    if provider == "bedrock" and bedrock_available():
-        runtime = boto3.Session(profile_name=AWS_PROFILE).client(
-            "bedrock-runtime", region_name=AWS_REGION,
-            config=Config(connect_timeout=5, read_timeout=60, retries={"max_attempts": 2}),
+        def _attempt():
+            return client.chat.completions.create(**kwargs)
+
+        # Task 17: retry transient failures (5xx/429/connection) with
+        # exponential backoff + jitter. Fatal 4xx raise on first occurrence.
+        return retry_with_backoff(
+            _attempt,
+            on_retry=lambda attempt, exc, delay: slog.warning(
+                "provider_call_retry",
+                provider=provider, model=model, attempt=attempt,
+                delay_seconds=round(delay, 2), error=str(exc)[:200],
+            ),
         )
-        converted = [{"role": m["role"], "content": [{"text": str(m.get("content", ""))}]} for m in messages if m.get("role") in ("user", "assistant") and m.get("content")]
-        if not converted:
-            converted = [{"role": "user", "content": [{"text": "Hello"}]}]
-        resp = runtime.converse(modelId=model, system=[{"text": SYSTEM_PROMPT}], messages=converted, inferenceConfig={"maxTokens": 4096, "temperature": 0.2})
-        text = resp["output"]["message"]["content"][0]["text"]
 
-        class _BR:
-            def __init__(self, t):
-                self.content = t
-                self.tool_calls = None
-                self.role = "assistant"
+    def _dispatch() -> Any:
+        if provider == "nvidia" and get_nvidia_client():
+            return _call_openai(get_nvidia_client())
+        if provider == "alibaba" and get_alibaba_client():
+            return _call_openai(get_alibaba_client(), max_tokens=8192)
+        if provider == "model_studio" and get_model_studio_client():
+            return _call_openai(get_model_studio_client(), max_tokens=8192)
+        if provider == "openai" and get_openai_client():
+            return _call_openai(get_openai_client())
+        if provider == "tokenhub" and get_tokenhub_client():
+            return _call_openai(get_tokenhub_client(), max_tokens=8192)
+        if provider == "opsora_api" and get_opsora_api_client():
+            return _call_openai(get_opsora_api_client(), max_tokens=8192)
+        if provider == "bedrock" and bedrock_available():
+            runtime = boto3.Session(profile_name=AWS_PROFILE).client(
+                "bedrock-runtime", region_name=AWS_REGION,
+                config=Config(connect_timeout=5, read_timeout=60, retries={"max_attempts": 2}),
+            )
+            converted = [{"role": m["role"], "content": [{"text": str(m.get("content", ""))}]} for m in messages if m.get("role") in ("user", "assistant") and m.get("content")]
+            if not converted:
+                converted = [{"role": "user", "content": [{"text": "Hello"}]}]
+            resp = runtime.converse(modelId=model, system=[{"text": SYSTEM_PROMPT}], messages=converted, inferenceConfig={"maxTokens": 4096, "temperature": 0.2})
+            text = resp["output"]["message"]["content"][0]["text"]
 
-        return type("R", (), {"choices": [type("C", (), {"message": _BR(text)})()]})()
+            class _BR:
+                def __init__(self, t):
+                    self.content = t
+                    self.tool_calls = None
+                    self.role = "assistant"
 
-    raise RuntimeError(f"Provider '{provider}' not available")
+            return type("R", (), {"choices": [type("C", (), {"message": _BR(text)})()]})()
+
+        raise RuntimeError(f"Provider '{provider}' not available")
+
+    # Task 18: a half-open breaker admits exactly one probe; its outcome is
+    # decisive regardless of error class (even a fatal 4xx from the probe
+    # re-opens the circuit, otherwise the breaker would stick half-open).
+    _was_probe = breaker.state == "half-open"
+    _started = time.time()
+    slog.info("provider_call_start", provider=provider, model=model)
+    try:
+        result = _dispatch()
+    except Exception as exc:
+        _elapsed_ms = int((time.time() - _started) * 1000)
+        transient = is_transient_error(exc)
+        if transient or _was_probe:
+            breaker.record_failure()
+        slog.error(
+            "provider_call_failed",
+            provider=provider, model=model, error=str(exc)[:300],
+            elapsed_ms=_elapsed_ms, transient=transient,
+            breaker_state=breaker.state,
+        )
+        raise
+    breaker.record_success()
+    slog.info(
+        "provider_call_success",
+        provider=provider, model=model,
+        elapsed_ms=int((time.time() - _started) * 1000),
+    )
+    return result
 
 
 def call_with_fallback(messages: list[dict], selection: Selection, use_tools: bool = True) -> tuple[Any, Selection]:
@@ -1136,12 +1212,22 @@ def call_with_fallback(messages: list[dict], selection: Selection, use_tools: bo
             if models:
                 candidates.append(Selection(prov, models[0]))
 
+    slog = get_structured_logger()
     for c in candidates:
         try:
             result = invoke_provider(c.provider, c.model, messages, use_tools)
+            if c.provider != selection.provider or c.model != selection.model:
+                # Task 16/18: visible trail when the fallback chain kicked in
+                # (e.g. because a tripped breaker failed fast upstream).
+                slog.info(
+                    "provider_fallback_used",
+                    requested_provider=selection.provider, requested_model=selection.model,
+                    fallback_provider=c.provider, fallback_model=c.model,
+                )
             return result, c
         except Exception as e:
             errors.append(f"{c.provider}:{c.model} → {str(e)[:120]}")
+    slog.error("all_providers_failed", errors=errors[:3])
     raise RuntimeError(f"All providers failed: {'; '.join(errors[:3])}")
 
 

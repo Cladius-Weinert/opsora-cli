@@ -47,3 +47,8 @@ htmlcov/
 # Distribution
 *.tar.gz
 *.whl
+
+# Runtime databases (billing, usage, marketing)
+*.db
+*.sqlite
+*.sqlite3

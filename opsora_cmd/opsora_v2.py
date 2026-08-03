@@ -14,6 +14,7 @@ import shlex
 import subprocess
 import sys
 import time
+import uuid
 import platform
 import shutil
 from dataclasses import dataclass, field
@@ -76,7 +77,9 @@ from opsora_mcp import MCPClient
 from problem_solver import solve_problem
 
 # v3.1 upgrades (lazy imports where possible for startup speed)
-from opsora_cost import CostTracker, extract_usage
+# MODEL_COSTS/_DEFAULT_COST: single source of truth for pricing lives in
+# opsora_cost (config/model_costs.json with built-in fallback) — Phase 1.
+from opsora_cost import CostTracker, extract_usage, MODEL_COSTS, _DEFAULT_COST
 from opsora_routing import IntentRouter as _IntentRouter, route as _smart_route
 from opsora_themes import load_theme_preference, get_theme, list_themes, save_theme_preference, apply_theme
 from opsora_plugins import PluginManager
@@ -422,7 +425,7 @@ SAFE_TOOLS = [
     # --- CODE CHANGES (use after understanding the codebase) ---
     {"type": "function", "function": {"name": "write_file", "description": "Create a NEW file or completely overwrite an existing file. USE for new files. For modifying existing files, prefer edit_file instead.", "parameters": {"type": "object", "properties": {"filepath": {"type": "string", "description": "File path to create/overwrite"}, "content": {"type": "string", "description": "Complete file content"}}, "required": ["filepath", "content"]}}},
     {"type": "function", "function": {"name": "edit_file", "description": "Edit existing file by replacing exact text match. USE for surgical changes to existing files. old_string must match EXACTLY what's in the file (read it first!).", "parameters": {"type": "object", "properties": {"filepath": {"type": "string", "description": "File to edit"}, "old_string": {"type": "string", "description": "Exact text to find (must match precisely)"}, "new_string": {"type": "string", "description": "Text to replace with"}}, "required": ["filepath", "old_string", "new_string"]}}},
-    {"type": "function", "function": {"name": "run_command", "description": "Execute shell command. USE for: build, install, test, git operations, system commands. Timeout: 120s. Returns stdout+stderr.", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "Shell command to execute"}}, "required": ["command"]}}},
+    {"type": "function", "function": {"name": "run_command", "description": "Execute a command (run directly, NO shell: pipes/redirects/&& not supported). USE for: build, install, test, git operations, system commands. Timeout: 120s. Returns stdout+stderr.", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "Command to execute, e.g. 'ls -la' or 'python3 -m pytest tests/ -q'"}}, "required": ["command"]}}},
 
     # --- VERIFY (use AFTER making changes) ---
     {"type": "function", "function": {"name": "run_tests", "description": "Auto-detect and run tests (pytest, jest, cargo test, go test, npm test). USE after code changes to verify correctness. Returns test output.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Project directory"}, "filter": {"type": "string", "description": "Test filter (e.g. test name pattern)"}}, "required": []}}},
@@ -493,15 +496,17 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
             return workspace_status()
 
         # --- File Operations ---
+        # SECURITY (Phase 1): every filepath is routed through _validate_path(),
+        # which resolves symlinks and enforces the workspace boundary. The
+        # sensitive-path blocklist below is kept as defense in depth.
         if name == "read_file":
-            fp = Path(args["filepath"])
-            if not fp.is_absolute():
-                fp = WORKSPACE_ROOT / fp
-            resolved = fp.resolve()
+            resolved = _validate_path(str(args["filepath"]))
             if SENSITIVE_PATHS & set(resolved.parts):
                 return "BLOCKED: folder credential (.aws/.ssh/.gnupg) gak bisa dibaca."
             if resolved.name in SENSITIVE_FILES or resolved.name.startswith(".env"):
                 return f"BLOCKED: {resolved.name} berisi credentials."
+            if not resolved.exists():
+                return f"ERROR: File not found: {resolved}"
             if needs_approval("read_file"):
                 if not prompt_approval(f"Read {resolved}"):
                     return "Read cancelled."
@@ -509,9 +514,7 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
             return content
 
         if name == "write_file":
-            fp = Path(args["filepath"])
-            if not fp.is_absolute():
-                fp = WORKSPACE_ROOT / fp
+            fp = _validate_path(str(args["filepath"]))
             content = str(args.get("content", ""))
             if needs_approval("write_file"):
                 preview = content[:500]
@@ -522,9 +525,7 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
             return f"Wrote {len(content)} chars to {fp}"
 
         if name == "edit_file":
-            fp = Path(args["filepath"])
-            if not fp.is_absolute():
-                fp = WORKSPACE_ROOT / fp
+            fp = _validate_path(str(args["filepath"]))
             if not fp.exists():
                 return f"ERROR: File not found: {fp}"
             content = fp.read_text(encoding="utf-8")
@@ -559,7 +560,20 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
             if needs_approval("run_command"):
                 if not prompt_approval(f"Run command", cmd):
                     return "Command cancelled."
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120, cwd=WORKSPACE_ROOT)
+            # SECURITY (Phase 1): no shell=True — parse into an argv list so
+            # metacharacters (; | && $ `` etc.) are passed through literally
+            # and cannot inject extra commands. Shell features (pipes,
+            # redirection) are no longer supported.
+            try:
+                cmd_args = shlex.split(cmd)
+            except ValueError as e:
+                return f"ERROR: Could not parse command: {e}"
+            if not cmd_args:
+                return "ERROR: Empty command."
+            result = subprocess.run(
+                cmd_args, capture_output=True, text=True, timeout=120,
+                cwd=WORKSPACE_ROOT if WORKSPACE_ROOT.is_dir() else None,
+            )
             output = (result.stdout or "") + (result.stderr or "")
             return output[:TOOL_MAX_OUTPUT] or f"Exit code {result.returncode}."
 
@@ -657,16 +671,26 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
             return clean[:max_chars]
 
         # --- Git Tools ---
+        # SECURITY (Phase 1): git tools run with argv lists + cwd (no shell=True),
+        # so a user-controlled path cannot inject shell commands.
         if name == "git_diff":
             repo_path = args.get("path", str(WORKSPACE_ROOT))
             if not Path(repo_path).is_absolute():
                 repo_path = str(WORKSPACE_ROOT / repo_path)
-            staged = "--cached" if args.get("staged") else ""
-            result = subprocess.run(
-                f"cd {repo_path} && git diff {staged} --stat && echo '---FULL DIFF---' && git diff {staged}",
-                shell=True, capture_output=True, text=True, timeout=30,
+            if not Path(repo_path).is_dir():
+                return f"ERROR: Not a directory: {repo_path}"
+            diff_cmd = ["git", "diff"] + (["--cached"] if args.get("staged") else [])
+            stat_res = subprocess.run(
+                diff_cmd + ["--stat"], capture_output=True, text=True, timeout=30, cwd=repo_path,
             )
-            output = (result.stdout or result.stderr or "No changes.").strip()
+            full_res = subprocess.run(
+                diff_cmd, capture_output=True, text=True, timeout=30, cwd=repo_path,
+            )
+            stat_out = (stat_res.stdout or stat_res.stderr or "").strip()
+            full_out = (full_res.stdout or full_res.stderr or "").strip()
+            if not stat_out and not full_out:
+                return "No changes."
+            output = f"{stat_out}\n---FULL DIFF---\n{full_out}".strip()
             # Truncate large diffs
             if len(output) > 8000:
                 lines = output.split("\n")
@@ -678,9 +702,11 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
             repo_path = args.get("path", str(WORKSPACE_ROOT))
             if not Path(repo_path).is_absolute():
                 repo_path = str(WORKSPACE_ROOT / repo_path)
+            if not Path(repo_path).is_dir():
+                return f"ERROR: Not a directory: {repo_path}"
             result = subprocess.run(
-                f"cd {repo_path} && git status --short",
-                shell=True, capture_output=True, text=True, timeout=10,
+                ["git", "status", "--short"],
+                capture_output=True, text=True, timeout=10, cwd=repo_path,
             )
             output = (result.stdout or result.stderr or "Clean working tree.").strip()
             return output
@@ -689,10 +715,15 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
             repo_path = args.get("path", str(WORKSPACE_ROOT))
             if not Path(repo_path).is_absolute():
                 repo_path = str(WORKSPACE_ROOT / repo_path)
-            count = args.get("count", 10)
+            if not Path(repo_path).is_dir():
+                return f"ERROR: Not a directory: {repo_path}"
+            try:
+                count = int(args.get("count", 10))
+            except (TypeError, ValueError):
+                return "ERROR: count must be an integer."
             result = subprocess.run(
-                f"cd {repo_path} && git log --oneline -{count}",
-                shell=True, capture_output=True, text=True, timeout=10,
+                ["git", "log", "--oneline", f"-{count}"],
+                capture_output=True, text=True, timeout=10, cwd=repo_path,
             )
             return (result.stdout or result.stderr or "No commits found.").strip()
 
@@ -726,13 +757,20 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
             repo_path = args.get("path", str(WORKSPACE_ROOT))
             if not Path(repo_path).is_absolute():
                 repo_path = str(WORKSPACE_ROOT / repo_path)
+            if not Path(repo_path).is_dir():
+                return f"ERROR: Not a directory: {repo_path}"
             message = args.get("message", "auto-commit")
             if needs_approval("git_commit"):
                 if not prompt_approval(f"git commit in {repo_path}", message):
                     return "Commit cancelled."
+            add_res = subprocess.run(
+                ["git", "add", "-A"], capture_output=True, text=True, timeout=30, cwd=repo_path,
+            )
+            if add_res.returncode != 0:
+                return (add_res.stderr or add_res.stdout or "git add failed.").strip()
             result = subprocess.run(
-                f"cd {repo_path} && git add -A && git commit -m {shlex.quote(message)}",
-                shell=True, capture_output=True, text=True, timeout=30,
+                ["git", "commit", "-m", str(message)],
+                capture_output=True, text=True, timeout=30, cwd=repo_path,
             )
             return (result.stdout or result.stderr or "Nothing to commit.").strip()
 
@@ -760,9 +798,7 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
             return (result.stdout or result.stderr or "No issues found.").strip()[:TOOL_MAX_OUTPUT]
 
         if name == "image_read":
-            fp = Path(args["filepath"])
-            if not fp.is_absolute():
-                fp = WORKSPACE_ROOT / fp
+            fp = _validate_path(str(args["filepath"]))
             if not fp.exists():
                 return f"ERROR: File not found: {fp}"
             # Get image metadata using stdlib
@@ -1088,40 +1124,16 @@ def compress_context(messages: list[dict], selection: Selection) -> list[dict]:
 # Token & Cost Tracking
 # ============================================================================
 
-MODEL_COSTS = {
-    # DashScope verified ($/M input, $/M output)
-    "qwen-plus": (0.40, 1.20),
-    "qwen-turbo": (0.05, 0.20),
-    "qwen-max": (2.00, 6.00),
-    "qwen3-coder-flash": (0.15, 0.60),
-    "qwen3-coder-plus": (0.40, 1.20),
-    "qwen3.7-max": (1.50, 4.50),
-    "qwen3.7-plus": (0.40, 1.20),
-    "qwen3.7-flash": (0.10, 0.30),
-    # NVIDIA verified ($/M input, $/M output) — all free tier!
-    "meta/llama-3.1-8b-instruct": (0.00, 0.00),
-    "meta/llama-3.1-70b-instruct": (0.00, 0.00),
-    "nvidia/nemotron-3-super-120b-a12b": (0.00, 0.00),
-    "nvidia/nemotron-3-ultra-550b-a55b": (0.00, 0.00),
-    "nvidia/llama-3.3-nemotron-super-49b-v1.5": (0.00, 0.00),
-    "nvidia/nemotron-3-nano-30b-a3b": (0.00, 0.00),
-    "nvidia/nvidia-nemotron-nano-9b-v2": (0.00, 0.00),
-    "nvidia/nemotron-mini-4b-instruct": (0.00, 0.00),
-    "mistralai/mistral-nemotron": (0.00, 0.00),
-    "mistralai/mistral-medium-3.5-128b": (0.00, 0.00),
-    "stepfun-ai/step-3.7-flash": (0.00, 0.00),
-    # Other providers
-    "hy3": (0.132, 0.132),
-    "kimi-k3": (0.20, 0.60),
-    "deepseek-v4-flash": (0.02, 0.02),
-}
+# Phase 1: pricing table de-duplicated. MODEL_COSTS and _DEFAULT_COST are
+# imported from opsora_cost (config/model_costs.json + built-in fallback) —
+# do NOT add a local copy here.
 
 def estimate_cost(model: str, input_chars: int, output_chars: int) -> tuple[int, float]:
     """Return (total_tokens, cost_usd) for a response."""
     input_tokens = input_chars // 4
     output_tokens = output_chars // 4
     total = input_tokens + output_tokens
-    costs = MODEL_COSTS.get(model, (0.30, 0.60))
+    costs = MODEL_COSTS.get(model, _DEFAULT_COST)
     cost = (input_tokens * costs[0] + output_tokens * costs[1]) / 1_000_000
     return total, cost
 
@@ -1130,17 +1142,29 @@ def estimate_cost(model: str, input_chars: int, output_chars: int) -> tuple[int,
 # Input Validation — Security helpers
 # ============================================================================
 
-def _validate_path(path: str, base: Path = WORKSPACE_ROOT) -> Path:
-    """Resolve path and ensure it's within base directory."""
+def _validate_path(path: str, base: Optional[Path] = None) -> Path:
+    """Resolve path (following symlinks) and ensure it's within base directory.
+
+    SECURITY (Phase 1): base is read at call time so tests/patches of
+    WORKSPACE_ROOT apply, symlinks are fully resolved before the boundary
+    check, and containment uses is_relative_to (string startswith could be
+    bypassed by sibling dirs like /root-evil for base /root).
+    Raises ValueError if the path is invalid or escapes the workspace.
+    """
+    if base is None:
+        base = WORKSPACE_ROOT
+    if not path or not str(path).strip():
+        raise ValueError(f"Invalid path: {path!r}")
     p = Path(path)
     if not p.is_absolute():
         p = base / p
     try:
         resolved = p.resolve()
-        if not str(resolved).startswith(str(base.resolve())):
-            raise ValueError(f"Path traversal attempt blocked: {path}")
-    except Exception:
-        raise ValueError(f"Invalid path: {path}")
+        base_resolved = base.resolve()
+    except (OSError, RuntimeError, ValueError) as e:
+        raise ValueError(f"Invalid path: {path}") from e
+    if not resolved.is_relative_to(base_resolved):
+        raise ValueError(f"Path traversal attempt blocked: {path}")
     return resolved
 
 
@@ -1225,10 +1249,14 @@ def _try_error_recovery(name: str, args: dict, output: str, history: list[dict],
                 capture_output=True, text=True, timeout=120,
             )
             if install_result.returncode == 0:
-                # Retry the original command
+                # Retry the original command (SECURITY: argv list, no shell=True)
+                try:
+                    retry_args = shlex.split(str(args["command"]))
+                except ValueError:
+                    return output
                 retry = subprocess.run(
-                    str(args["command"]), shell=True,
-                    capture_output=True, text=True, timeout=120, cwd=WORKSPACE_ROOT,
+                    retry_args, capture_output=True, text=True, timeout=120,
+                    cwd=WORKSPACE_ROOT if WORKSPACE_ROOT.is_dir() else None,
                 )
                 retry_output = (retry.stdout or "") + (retry.stderr or "")
                 console.print(f"  [dim green]✓ {pip_pkg} installed, command retried[/dim]")
@@ -2167,6 +2195,16 @@ def _show_tools() -> None:
 # ============================================================================
 
 
+def generate_session_id() -> str:
+    """Generate a unique session id: 12 lowercase hex chars (uuid4-based).
+
+    Phase 1 bugfix: the previous implementation hashed ``time.time()``, so two
+    sessions started within the same clock tick produced identical ids.
+    The 12-char hex format is kept for compatibility with ``sessions.id``.
+    """
+    return uuid.uuid4().hex[:12]
+
+
 def main():
     global _mcp_client, selection
 
@@ -2245,9 +2283,8 @@ def main():
     # Welcome
     print_welcome(f"{selection.provider}:{selection.model}", len(SAFE_TOOLS), approval_mode)
 
-    # Session
-    import hashlib
-    session_id = hashlib.sha256(f"{time.time()}".encode()).hexdigest()[:12]
+    # Session (uuid4-based id — no timestamp collisions, Phase 1 bugfix)
+    session_id = generate_session_id()
     history: list[dict] = []
 
     # Custom completer with descriptions — shows on "/"

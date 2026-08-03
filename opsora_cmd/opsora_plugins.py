@@ -38,6 +38,11 @@ class PluginManager:
         self._dir = plugins_dir
         self._plugins: dict[str, OpsoraPlugin] = {}
 
+    @property
+    def plugins(self) -> dict[str, OpsoraPlugin]:
+        """Mapping of loaded plugin name -> plugin instance (read view of `_plugins`)."""
+        return self._plugins
+
     def discover(self) -> list[str]:
         """Scan plugin directory and load .py files. Returns list of plugin names."""
         self._plugins.clear()

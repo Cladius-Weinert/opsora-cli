@@ -2,9 +2,14 @@
 # Test script for all Tencent Cloud services configured for Opsora
 # Usage: bash test-tencent-services.sh
 
-SECRET_ID="IKIDx9Naw78906MOaMgniSzKSimqkZEh084o"
-SECRET_KEY="yztlS5bvGSTIzX1JQOAzgR6bsuhH4ds4"
+SECRET_ID="${TENCENT_SECRET_ID:-}"
+SECRET_KEY="${TENCENT_SECRET_KEY:-}"
 REGION="ap-singapore"
+
+if [ -z "$SECRET_ID" ] || [ -z "$SECRET_KEY" ]; then
+    echo "ERROR: Set TENCENT_SECRET_ID and TENCENT_SECRET_KEY environment variables"
+    exit 1
+fi
 
 echo "=========================================="
 echo "  Tencent Cloud Services Test - Opsora"

@@ -1,107 +1,535 @@
 # Contributing to Opsora CLI
 
-Thank you for your interest in contributing! Opsora is open source and we welcome contributions of all kinds.
+> **Bahasa Indonesia + English**  
+> Terima kasih atas minat Anda berkontribusi! Opsora adalah open source dan kami menyambut kontribusi segala jenis.
 
-## Getting Started
+---
 
-1. **Fork** the repository on GitHub.
-2. **Clone** your fork locally:
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/opsora-cli.git
-   cd opsora-cli
-   ```
-3. **Install** in development mode:
-   ```bash
-   pip install -e ".[dev]"
-   ```
-4. Create a **feature branch**:
-   ```bash
-   git checkout -b feature/my-feature
-   ```
+## 🚀 Getting Started | Memulai
 
-## Development Guidelines
+### 1. Fork Repository
+
+Fork repository di GitHub: https://github.com/opsora/opsora-cli/fork
+
+### 2. Clone Fork Anda
+
+```bash
+git clone https://github.com/YOUR_USERNAME/opsora-cli.git
+cd opsora-cli
+```
+
+### 3. Install Development Mode
+
+```bash
+pip install -e ".[dev]"
+```
+
+Ini menginstall dependencies + development tools (pytest, ruff, mypy).
+
+### 4. Buat Feature Branch
+
+```bash
+git checkout -b feature/nama-fitur-anda
+# atau
+git checkout -b fix/nama-bug-yang-diperbaiki
+```
+
+---
+
+## 📝 Development Guidelines | Pedoman Pengembangan
 
 ### Code Style
 
-- Follow [PEP 8](https://peps.python.org/pep-0008/) conventions.
-- Use type hints for function signatures.
-- Keep functions small and focused (single responsibility).
-- Write docstrings for public functions.
+- Ikuti [PEP 8](https://peps.python.org/pep-0008/) conventions
+- Gunakan **type hints** untuk function signatures
+- Jaga functions kecil dan focused (single responsibility)
+- Tulis **docstrings** untuk public functions (Google/NumPy style)
 
-We use [Ruff](https://github.com/astral-sh/ruff) for linting and formatting:
+**Contoh:**
+
+```python
+def execute_tool(name: str, args: dict[str, Any]) -> str:
+    """Execute a tool by name with given arguments.
+    
+    Args:
+        name: Tool name (e.g., 'read_file', 'run_command')
+        args: Tool arguments matching the tool's schema
+        
+    Returns:
+        Tool output as string, or error message
+        
+    Raises:
+        ValueError: If tool name is not recognized
+    """
+    ...
+```
+
+### Linting & Formatting
+
+Kami menggunakan [Ruff](https://github.com/astral-sh/ruff) untuk linting dan formatting:
 
 ```bash
-ruff check cmd/
-ruff format cmd/
+# Check linting
+ruff check opsora_cmd/
+
+# Auto-fix issues
+ruff check opsora_cmd/ --fix
+
+# Format code
+ruff format opsora_cmd/
+
+# Run both
+ruff check opsora_cmd/ && ruff format opsora_cmd/
+```
+
+**Pre-commit hook** (opsional tapi direkomendasikan):
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+### Type Checking
+
+```bash
+mypy opsora_cmd/
 ```
 
 ### Testing
 
-- Write tests for new features and bug fixes.
-- Run the test suite before submitting:
-  ```bash
-  pytest tests/
-  ```
-- Aim for meaningful coverage, not 100% line coverage.
+- Tulis tests untuk fitur baru dan bug fixes
+- Jalankan test suite sebelum submit PR:
 
-### Commit Messages
+```bash
+# All tests
+pytest tests/
 
-Use clear, descriptive commit messages:
+# Verbose
+pytest tests/ -v
 
-```
-feat: add streaming response support for NVIDIA provider
-fix: handle timeout when Ollama is unreachable
-docs: update provider configuration examples
-refactor: extract fallback chain into separate function
-test: add tests for auto-routing engine
+# With coverage
+pytest tests/ --cov=opsora_cmd --cov-report=term-missing
+
+# Specific test file
+pytest tests/test_routing.py -v
 ```
 
-### Pull Requests
+**Test Structure:**
+```
+tests/
+├── conftest.py              # Shared fixtures
+├── test_compression.py      # Context compression tests
+├── test_memory.py           # Memory persistence tests
+├── test_routing.py          # Intent router tests
+├── test_session.py          # Session save/load tests
+├── test_tokenhub.py         # TokenHub provider tests
+└── test_tools.py            # Tool execution tests
+```
 
-1. **Keep PRs focused** — one feature or fix per PR.
-2. **Update documentation** if you change behavior.
-3. **Add tests** for new functionality.
-4. **Ensure CI passes** — linting, tests, and type checks.
-5. Write a clear PR description explaining **what** and **why**.
+**Target Coverage:** Meaningful coverage > 100% line coverage.
 
-## Adding a New Provider
+---
 
-To add support for a new AI provider:
+## 📋 Commit Messages
 
-1. Add the provider client initialization in `cmd/opsora_v2.py`.
-2. Add the provider to `PROVIDER_MODELS`.
-3. Implement `invoke_<provider>()` following the existing pattern.
-4. Add availability check to `is_provider_available()`.
-5. Update `show_models_table()` to display the new provider.
-6. Update this README and the main README.
+Gunakan clear, descriptive commit messages mengikuti [Conventional Commits](https://www.conventionalcommits.org/):
 
-## Adding a New Tool
+```
+<type>(<scope>): <description>
 
-To add a new tool:
+[optional body]
 
-1. Define the tool schema in `SAFE_TOOLS` following the OpenAI function-calling format.
-2. Implement the execution logic in `execute_tool()`.
-3. Add the tool to `show_tools_status()`.
-4. Write tests for the tool.
+[optional footer]
+```
 
-## Security
+**Types:**
+| Type | Description |
+|---|---|
+| `feat` | Fitur baru |
+| `fix` | Bug fix |
+| `docs` | Documentation only |
+| `refactor` | Code restructuring tanpa behavior change |
+| `test` | Adding/updating tests |
+| `chore` | Maintenance (deps, config, etc.) |
+| `perf` | Performance improvement |
+| `security` | Security fix |
 
-- **Never commit API keys, secrets, or credentials.**
-- If you discover a security vulnerability, email security@opsora.dev instead of opening a public issue.
-- The `.opsora_env` file and any `*.env` files are gitignored.
+**Examples:**
 
-## Reporting Issues
+```bash
+feat(routing): add vision intent classification for image prompts
+fix(memory): handle sqlite locking on concurrent access
+docs(readme): update provider table with TokenHub models
+refactor(agent): extract verification logic to separate method
+test(tools): add test for edit_file with non-existent file
+chore(deps): update ruff to 0.5.0
+```
 
-- Use the [bug report template](.github/ISSUE_TEMPLATE/bug_report.md) for bugs.
-- Use the [feature request template](.github/ISSUE_TEMPLATE/feature_request.md) for ideas.
-- Search existing issues before opening a new one.
+---
 
-## Code of Conduct
+## 🔀 Pull Requests
 
-- Be respectful and constructive.
-- Focus on the technical merits of contributions.
-- Help newcomers learn and contribute.
+### PR Checklist
 
-## License
+- [ ] **Focused scope** — satu fitur atau fix per PR
+- [ ] **Tests pass** — `pytest tests/` green
+- [ ] **Linting clean** — `ruff check opsora_cmd/` clean
+- [ ] **Types clean** — `mypy opsora_cmd/` clean
+- [ ] **Documentation updated** — README, ARCHITECTURE, atau file docs relevan
+- [ ] **Clear description** — jelaskan *what* dan *why*
 
-By contributing, you agree that your contributions will be licensed under the [MIT License](LICENSE).
+### PR Template
+
+```markdown
+## Description
+Brief description of changes.
+
+## Type of Change
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Breaking change
+- [ ] Documentation update
+
+## Testing
+- [ ] Unit tests added/updated
+- [ ] Manual testing performed
+- [ ] All existing tests pass
+
+## Checklist
+- [ ] Code follows style guidelines
+- [ ] Self-review completed
+- [ ] Comments added for complex logic
+- [ ] Documentation updated
+- [ ] No breaking changes (or documented)
+```
+
+### Review Process
+
+1. **Automated checks** — CI runs linting, tests, type checks
+2. **Maintainer review** — Code review untuk correctness, style, architecture
+3. **Feedback incorporation** — Address review comments
+4. **Approval & merge** — Squash merge ke `main`
+
+---
+
+## 🔌 Adding a New Provider
+
+Untuk menambah support provider AI baru:
+
+### 1. Add Client Initialization (`opsora_v2.py`)
+
+```python
+def get_newprovider_client() -> Optional[OpenAI]:
+    global _newprovider_client
+    if _newprovider_client is None:
+        key = os.environ.get("NEWPROVIDER_API_KEY")
+        if key:
+            _newprovider_client = OpenAI(
+                api_key=key,
+                base_url="https://api.newprovider.com/v1",
+                timeout=DEFAULT_TIMEOUT
+            )
+    return _newprovider_client
+```
+
+### 2. Add to Provider Models
+
+```python
+PROVIDER_MODELS = {
+    # ... existing
+    "newprovider": "model-1,model-2,model-3",
+}
+```
+
+### 3. Implement Invoke Function
+
+```python
+async def invoke_newprovider(
+    model: str,
+    messages: list[dict],
+    tools: list[dict] | None = None,
+    **kwargs
+) -> Any:
+    client = get_newprovider_client()
+    if not client:
+        raise RuntimeError("NewProvider not configured")
+    return client.chat.completions.create(
+        model=model,
+        messages=messages,
+        tools=tools,
+        **kwargs
+    )
+```
+
+### 4. Add Availability Check
+
+```python
+def is_provider_available(provider: str) -> bool:
+    return {
+        # ... existing
+        "newprovider": get_newprovider_client() is not None,
+    }.get(provider, False)
+```
+
+### 5. Update Model Tiers (if applicable)
+
+```python
+# Add to appropriate tier based on capabilities
+POWER_MODELS.append(("newprovider", "model-1"))
+CODING_MODELS.append(("newprovider", "model-2"))
+```
+
+### 6. Update Documentation
+
+- `README.md` — Provider table
+- `PROVIDERS.md` — Detailed config
+- `ARCHITECTURE.md` — Provider layer diagram
+
+---
+
+## 🛠️ Adding a New Tool
+
+### 1. Define Tool Schema
+
+Tambahkan ke `SAFE_TOOLS` di `opsora_v2.py`:
+
+```python
+{"type": "function", "function": {
+    "name": "my_new_tool",
+    "description": "Clear description of what this tool does. USE WHEN...",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "param1": {"type": "string", "description": "Description"},
+            "param2": {"type": "integer", "description": "Description"}
+        },
+        "required": ["param1"]
+    }
+}},
+```
+
+### 2. Implement Execution Logic
+
+Di `execute_tool()` function:
+
+```python
+if name == "my_new_tool":
+    param1 = args.get("param1")
+    param2 = args.get("param2", 10)
+    
+    # Validation
+    if not param1:
+        return "Error: param1 is required"
+    
+    # Execution
+    try:
+        result = do_something(param1, param2)
+        return str(result)
+    except Exception as e:
+        return f"Error: {e}"
+```
+
+### 3. Add to Status Display
+
+```python
+def show_tools_status():
+    # ... existing
+    tools_list.append(("my_new_tool", "🔧 My New Tool", "Available"))
+```
+
+### 4. Write Tests
+
+```python
+# tests/test_tools.py
+def test_my_new_tool():
+    result = execute_tool("my_new_tool", {"param1": "test"})
+    assert "expected output" in result
+```
+
+### 5. Security Review
+
+- Path traversal protection?
+- Sensitive file blocking?
+- Input validation?
+- Timeout handling?
+
+---
+
+## 🧪 Testing Guidelines
+
+### Unit Tests
+
+- Test satu function/class per test
+- Mock external dependencies (API calls, file system, time)
+- Use descriptive test names: `test_<function>_<scenario>_<expected>`
+
+```python
+def test_auto_select_model_code_intent_returns_coding_model():
+    prompt = "write a python function to parse json"
+    selection = auto_select_model(prompt)
+    assert selection.provider in ("alibaba", "nvidia")
+    assert "coder" in selection.model or "code" in selection.model
+```
+
+### Integration Tests
+
+- Test full flows (prompt → routing → provider → response)
+- Use test providers or mock clients
+- Mark with `@pytest.mark.integration`
+
+### Test Fixtures (conftest.py)
+
+```python
+@pytest.fixture
+def mock_nvidia_client(monkeypatch):
+    mock = MagicMock()
+    monkeypatch.setattr("opsora_v2.get_nvidia_client", lambda: mock)
+    return mock
+```
+
+---
+
+## 🔒 Security
+
+### Reporting Vulnerabilities
+
+**JANGAN buka public issue** untuk security vulnerabilities.
+
+Email: **security@opsora.dev**
+
+Include:
+- Description of vulnerability
+- Steps to reproduce
+- Potential impact
+- Suggested fix (if any)
+
+### Security Practices
+
+- **Never commit API keys, secrets, atau credentials**
+- `.opsora_env` dan `*.env` files sudah di-gitignore
+- Gunakan `os.environ.get()` untuk secrets
+- Validate all file paths (path traversal protection)
+- Read-only AWS operations by default
+
+---
+
+## 📖 Documentation
+
+### When to Update Docs
+
+| Change | Docs to Update |
+|---|---|
+| New provider | README.md, PROVIDERS.md, ARCHITECTURE.md |
+| New tool | README.md, ARCHITECTURE.md, TOOLS.md (future) |
+| New slash command | README.md, opsora_tui.py help |
+| Architecture change | ARCHITECTURE.md |
+| Config change | PROVIDERS.md, DEPLOYMENT.md |
+| Breaking change | CHANGELOG.md, README.md migration guide |
+
+### Documentation Style
+
+- **Bilingual** (Indonesia + English) — parallel sections
+- **Code examples** — practical, copy-pasteable
+- **Mermaid diagrams** — untuk architecture/flows
+- **Tables** — untuk comparison/configuration
+- **Links** — cross-reference related docs
+
+---
+
+## 🐛 Reporting Issues
+
+### Bug Reports
+
+Gunakan [Bug Report Template](.github/ISSUE_TEMPLATE/bug_report.md):
+
+```markdown
+**Describe the bug**
+Clear description of what went wrong.
+
+**To Reproduce**
+Steps to reproduce:
+1. Run command '...'
+2. Input '...'
+3. See error
+
+**Expected behavior**
+What should happen.
+
+**Environment**
+- OS: Ubuntu 24.04 / macOS / Windows WSL
+- Python: 3.12.3
+- Opsora version: 3.1.0
+- Providers configured: nvidia, alibaba
+
+**Logs/Output**
+```
+Paste relevant output here
+```
+```
+
+### Feature Requests
+
+Gunakan [Feature Request Template](.github/ISSUE_TEMPLATE/feature_request.md):
+
+```markdown
+**Is your feature request related to a problem?**
+Clear description of the problem.
+
+**Describe the solution you'd like**
+What you want to happen.
+
+**Describe alternatives you've considered**
+Other approaches.
+
+**Additional context**
+Screenshots, mockups, references.
+```
+
+---
+
+## 🤝 Code of Conduct
+
+### Our Standards
+
+- **Be respectful** — constructive feedback, no personal attacks
+- **Be inclusive** — welcome newcomers, help them learn
+- **Be collaborative** — focus on technical merits
+- **Be patient** — reviews take time, discussions are valuable
+
+### Unacceptable Behavior
+
+- Harassment, discrimination, or hate speech
+- Trolling, insulting, or derogatory comments
+- Public or private harassment
+- Publishing private information without consent
+
+### Enforcement
+
+Violations dapat dilaporkan ke **conduct@opsora.org**. Semua laporan ditinjau dan ditindaklanjuti.
+
+---
+
+## 📄 License
+
+Dengan berkontribusi, Anda setuju kontribusi Anda akan dilisensikan di bawah [MIT License](LICENSE).
+
+---
+
+## 🙏 Recognition
+
+Kontributor akan ditambahkan ke:
+- `CONTRIBUTORS.md` (akan dibuat)
+- Release notes
+- GitHub contributors graph
+
+---
+
+## 📞 Getting Help
+
+- **Discord:** https://discord.gg/opsora
+- **GitHub Discussions:** https://github.com/opsora/opsora-cli/discussions
+- **Email:** hello@opsora.dev
+
+---
+
+*Terima kasih untuk berkontribusi ke Opsora! 🎉*

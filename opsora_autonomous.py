@@ -169,35 +169,44 @@ def check_api_gateway():
             log.error(f"[api-gateway] Failed to start: {e}")
             return False
 
+LEAD_SEGMENTS = ["villa", "salon", "rental", "dental", "travel", "gym", "restaurant", "clinic", "spa", "laundry"]
+LEAD_LOCATIONS = ["Denpasar", "Seminyak", "Canggu", "Ubud", "Kuta", "Sanur", "Badung", "Gianyar"]
+
+
 def run_lead_scanner():
     """Run lead scanning — uses existing opsora-lead-scraper.py if available."""
     log.info("[lead-scanner] Scanning for leads...")
-    
+
     scraper = Path("/data/data/com.termux/files/home/opsora-lead-scraper.py")
     if scraper.exists():
+        # Rotate segment/location each run for broad coverage across Bali
+        idx = int(time.time() // 1800)
+        segment = LEAD_SEGMENTS[idx % len(LEAD_SEGMENTS)]
+        location = LEAD_LOCATIONS[(idx // len(LEAD_SEGMENTS)) % len(LEAD_LOCATIONS)]
         try:
             result = subprocess.run(
-                ["python3", str(scraper), "--output", str(OPSORA_DIR / "leads.json")],
-                capture_output=True, text=True, timeout=120
+                ["python3", str(scraper), "--segment", segment, "--location", location, "--limit", "10"],
+                capture_output=True, text=True, timeout=180
             )
             if result.returncode == 0:
-                log.info(f"[lead-scanner] ✅ Scan complete")
-                # Parse and store leads
-                leads_file = OPSORA_DIR / "leads.json"
-                if leads_file.exists():
-                    try:
-                        leads = json.loads(leads_file.read_text())
-                        conn = sqlite3.connect(str(DB_PATH))
-                        for lead in (leads if isinstance(leads, list) else [leads]):
-                            conn.execute(
-                                "INSERT OR IGNORE INTO lead_log (source, name, business, phone, status, created_at) VALUES (?, ?, ?, ?, 'new', ?)",
-                                ("scanner", lead.get("name", ""), lead.get("business", ""), lead.get("phone", ""), time.time())
-                            )
-                        conn.commit()
-                        conn.close()
-                        log.info(f"[lead-scanner] Stored {len(leads) if isinstance(leads, list) else 1} leads")
-                    except Exception as e:
-                        log.error(f"[lead-scanner] Parse error: {e}")
+                # Scraper prints {"query", "count", "businesses": [...]} JSON to stdout
+                try:
+                    data = json.loads(result.stdout)
+                    leads = data.get("businesses", []) if isinstance(data, dict) else data
+                except json.JSONDecodeError as e:
+                    log.error(f"[lead-scanner] Parse error: {e}")
+                    return False
+                log.info(f"[lead-scanner] ✅ Scan complete ({segment}/{location}): {len(leads)} leads")
+                if leads:
+                    conn = sqlite3.connect(str(DB_PATH))
+                    for lead in leads:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO lead_log (source, name, business, phone, status, created_at) VALUES (?, ?, ?, ?, 'new', ?)",
+                            ("scanner", lead.get("name", ""), lead.get("business") or lead.get("address", ""), lead.get("phone", ""), time.time())
+                        )
+                    conn.commit()
+                    conn.close()
+                    log.info(f"[lead-scanner] Stored {len(leads)} leads")
                 return True
             else:
                 log.warning(f"[lead-scanner] Scan failed: {result.stderr[:200]}")
@@ -324,22 +333,24 @@ def run_email_marketing():
 def run_billing_collector():
     """Check billing and revenue."""
     log.info("[billing-collector] Checking billing status...")
-    
+
     # Check if billing.db exists and has data
     billing_db = Path("/root/projects/opsora-agent-api/billing.db")
     if billing_db.exists():
         try:
             conn = sqlite3.connect(str(billing_db))
+            # invoices schema uses total_idr (= base_amount_idr + overage_amount_idr)
             invoices = conn.execute(
-                "SELECT COUNT(*), COALESCE(SUM(amount_idr), 0) FROM invoices WHERE status='paid'"
+                "SELECT COUNT(*), COALESCE(SUM(total_idr), 0) FROM invoices WHERE status='paid'"
             ).fetchone()
             conn.close()
             log.info(f"[billing-collector] ✅ Paid invoices: {invoices[0]}, Total: Rp {invoices[1]:,.0f}")
         except Exception as e:
-            log.info(f"[billing-collector] Billing DB check: {e}")
+            log.warning(f"[billing-collector] Billing DB check failed: {e}")
+            return False
     else:
         log.info("[billing-collector] No billing DB yet (new installation)")
-    
+
     return True
 
 def run_health_monitor():

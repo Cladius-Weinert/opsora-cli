@@ -35,12 +35,16 @@ dependencies = [
     "rich>=13.0.0",
     "prompt-toolkit>=3.0.0",
     "boto3>=1.28.0",
+    # Textual powers the new persistent TUI (pinned input). Optional at
+    # runtime — the CLI falls back to the classic REPL if it is missing.
+    "textual>=8.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "pytest-asyncio>=0.23",
     "ruff>=0.1.0",
     "mypy>=1.0",
 ]

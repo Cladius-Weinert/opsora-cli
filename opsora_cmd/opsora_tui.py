@@ -706,47 +706,6 @@ def render_help() -> None:
 # WELCOME SCREEN — Rich with provider health
 # ============================================================================
 
-def print_welcome(model: str, tools_count: int, approval: ApprovalMode, provider: str = "alibaba") -> None:
-    console.print()
-    
-    # Animated logo
-    logo = [
-        "  ██████╗ ██╗   ██╗ ██████╗ ██████╗ ███████╗███╗   ██╗",
-        "  ██╔══██╗╚██╗ ██╔╝██╔════╝ ██╔══██╗██╔════╝████╗  ██║",
-        "  ██████╔╝ ╚████╔╝ ██║     ██████╔╝█████╗  ██╔██╗ ██║",
-        "  ██╔═══╝   ╚██╔╝  ██║     ██╔═══╝ ██╔══╝  ██║╚██╗██║",
-        "  ██║        ██║  ███████╗██║     ███████╗██║ ╚████║",
-        "  ╚═╝        ╚═╝  ╚══════╝╚═╝     ╚══════╝╚═╝  ╚═══╝",
-    ]
-    
-    for line in logo:
-        console.print(Text(line, style=f"bold {_c('accent')}"))
-    
-    console.print()
-    
-    # Provider health cards
-    providers = [
-        ("NVIDIA NIM", "nvidia", ["nemotron-3-ultra", "deepseek-v4-flash", "llama-3.1-70b"]),
-        ("Alibaba DashScope", "alibaba", ["qwen-max", "qwen3-coder-plus", "qwen3.7-max"]),
-        ("OpenRouter", "openrouter", ["gpt-4o", "claude-3.5-sonnet", "gemini-1.5-pro"]),
-        ("AWS Bedrock", "bedrock", ["nova-pro", "nova-lite", "claude-3-haiku"]),
-        ("Local (Ollama)", "local", ["llama3.1", "qwen2.5", "codellama"]),
-    ]
-    
-    console.print(Text("  ┌─ Provider Health ─────────────────────────────┐", style=_c("border")))
-    for name, key, models in providers:
-        avail = is_provider_available(key) if 'is_provider_available' in globals() else True
-        status = "🟢" if avail else "🔴"
-        model_list = ", ".join(models[:3])
-        console.print(Text(f"  │ {status} {name:<20} {model_list}", style="dim" if not avail else ""))
-    console.print(Text(f"  └──────────────────────────────────────────────┘", style=_c("border")))
-    
-    console.print()
-    console.print(Text(f"  {tools_count} tools · {model} · {get_approval_mode().value} mode", style="dim"))
-    console.print(Text("  /help untuk commands · /status untuk detail · Tab untuk autocomplete", style="dim"))
-    console.print()
-
-
 def is_provider_available(provider: str) -> bool:
     env_keys = {
         "nvidia": "NVIDIA_API_KEY",
@@ -759,6 +718,105 @@ def is_provider_available(provider: str) -> bool:
     if key is None:
         return True
     return bool(os.environ.get(key))
+
+
+def get_provider_health() -> List[Dict[str, Any]]:
+    """Provider health data, shared by the classic welcome screen and the TUI.
+
+    Returns a list of dicts: name, key, models (sample), available (bool).
+    """
+    providers = [
+        ("NVIDIA NIM", "nvidia", ["nemotron-3-ultra", "deepseek-v4-flash", "llama-3.1-70b"]),
+        ("Alibaba DashScope", "alibaba", ["qwen-max", "qwen3-coder-plus", "qwen3.7-max"]),
+        ("OpenRouter", "openrouter", ["gpt-4o", "claude-3.5-sonnet", "gemini-1.5-pro"]),
+        ("AWS Bedrock", "bedrock", ["nova-pro", "nova-lite", "claude-3-haiku"]),
+        ("Local (Ollama)", "local", ["llama3.1", "qwen2.5", "codellama"]),
+    ]
+    health = []
+    for name, key, models in providers:
+        health.append({
+            "name": name,
+            "key": key,
+            "models": models,
+            "available": is_provider_available(key),
+        })
+    return health
+
+
+def _gradient_steps(hex_color: str, steps: int) -> List[str]:
+    """Produce `steps` colors from `hex_color` down to a dimmed variant.
+
+    Used for the banner gradient. Pure stdlib string math — no Rich dependency.
+    """
+    hex_color = hex_color.lstrip("#")
+    if len(hex_color) != 6:
+        return [hex_color] * steps
+    try:
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+    except ValueError:
+        return [hex_color] * steps
+    out = []
+    for i in range(steps):
+        # Scale from 1.0 (full brightness) down to 0.35
+        f = 1.0 - (0.65 * i / max(1, steps - 1))
+        out.append("#{:02x}{:02x}{:02x}".format(
+            int(r * f), int(g * f), int(b * f)))
+    return out
+
+
+def print_welcome(model: str, tools_count: int, approval: ApprovalMode, provider: str = "alibaba") -> None:
+    accent = _c("accent")
+    border_c = _c("border")
+    dim_c = _c("dim")
+    success_c = _c("success")
+    error_c = _c("error")
+
+    console.print()
+
+    # Gradient logo — each line a progressively deeper shade of the accent.
+    logo = [
+        "  ██████╗ ██╗   ██╗ ██████╗ ██████╗ ███████╗███╗   ██╗",
+        "  ██╔══██╗╚██╗ ██╔╝██╔════╝ ██╔══██╗██╔════╝████╗  ██║",
+        "  ██████╔╝ ╚████╔╝ ██║     ██████╔╝█████╗  ██╔██╗ ██║",
+        "  ██╔═══╝   ╚██╔╝  ██║     ██╔═══╝ ██╔══╝  ██║╚██╗██║",
+        "  ██║        ██║  ███████╗██║     ███████╗██║ ╚████║",
+        "  ╚═╝        ╚═╝  ╚══════╝╚═╝     ╚══════╝╚═╝  ╚═══╝",
+    ]
+    gradient = _gradient_steps(accent, len(logo))
+    for line, color in zip(logo, gradient):
+        console.print(Text(line, style=f"bold {color}"))
+
+    console.print(Text("        One terminal · Every AI provider · Zero lock-in",
+                       style=f"italic {dim_c}"))
+    console.print()
+
+    # Provider health — colored ● dots (render reliably on Android terminals,
+    # unlike emoji which show as boxes).
+    health = get_provider_health()
+    name_w = max(len(h["name"]) for h in health) + 2
+    inner_w = name_w + 3 + 46  # dot + name + models
+    console.print(Text(f"  ┌─ Provider Health ─{'─' * max(0, inner_w - 19)}┐", style=border_c))
+    for h in health:
+        if h["available"]:
+            dot = Text("● ", style=f"bold {success_c}")
+            row_style = ""
+        else:
+            dot = Text("● ", style=f"{error_c}")
+            row_style = "dim"
+        model_list = ", ".join(h["models"][:3])
+        row = Text("  │ ", style=border_c)
+        row.append_text(dot)
+        row.append(f"{h['name']:<{name_w}}", style=f"bold {row_style}")
+        row.append(model_list, style=row_style or dim_c)
+        console.print(row)
+    console.print(Text(f"  └{'─' * inner_w}┘", style=border_c))
+
+    console.print()
+    console.print(Text(f"  {tools_count} tools · {model} · {get_approval_mode().value} mode", style="dim"))
+    console.print(Text("  /help untuk commands · /status untuk detail · Tab untuk autocomplete", style="dim"))
+    console.print()
 
 
 # ============================================================================

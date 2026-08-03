@@ -1705,6 +1705,190 @@ def run_agent_turn(history: list[dict], selection: Selection, status_bar: Status
     return history, selection
 
 
+def run_turn_tui(history: list[dict], selection: Selection, status_bar: StatusBar,
+                 emit, status) -> tuple[list[dict], Selection]:
+    """Agent turn for the Textual TUI.
+
+    Mirrors :func:`run_agent_turn` but renders through two callbacks instead of
+    the global Rich console, so output lands in the persistent TUI log:
+
+    - ``emit(renderable)``  — append a Rich renderable to the output pane
+    - ``status(text)``      — update the activity line in the status bar
+
+    All backend behaviour (routing, fallback, tools, safety, auto-continue,
+    cost tracking) is identical to the classic path.
+    """
+    from rich.markdown import Markdown as _Markdown
+    from rich.panel import Panel as _Panel
+
+    total_rounds = TOOL_MAX_ROUNDS
+    total_input_chars = 0
+    total_output_chars = 0
+
+    _turn_num = sum(1 for m in history if m.get("role") == "user")
+    model_short = selection.model.split("/")[-1] if "/" in selection.model else selection.model
+    emit(Text(f"── #{_turn_num} {model_short} ", style="dim")
+         + Text("─" * max(5, 30 - len(str(_turn_num)) - len(model_short)), style="#2a2a3a"))
+
+    for round_idx in range(total_rounds):
+        sys_prompt = SYSTEM_PROMPT
+        if _project_context:
+            sys_prompt += f"\n\n## PROJECT CONTEXT (from opsora.md):\n{_project_context}\n"
+        messages = [{"role": "system", "content": sys_prompt}, *history]
+        messages = compress_context(messages, selection)
+
+        status_bar.context_used = sum(len(str(m.get("content", ""))) for m in messages) // 4
+        status_bar.provider = selection.provider
+        status_bar.model = selection.model
+
+        try:
+            _max_retries = 3
+            _retry_delay = 2.0
+            for _retry in range(_max_retries):
+                try:
+                    status(f"{selection.model} …")
+                    response, selection = call_with_fallback(messages, selection, use_tools=True)
+                    break
+                except (URLError, ConnectionError, TimeoutError, OSError) as e:
+                    if _retry < _max_retries - 1:
+                        emit(Text(f"↻ Retry {_retry + 1}/{_max_retries} ({_retry_delay:.0f}s): {str(e)[:50]}", style="dim"))
+                        time.sleep(_retry_delay)
+                        _retry_delay *= 2
+                    else:
+                        raise
+
+            msg = response.choices[0].message if hasattr(response, "choices") else response
+            msg_dict = msg.model_dump(exclude_none=True) if hasattr(msg, "model_dump") else {"role": "assistant", "content": getattr(msg, "content", "")}
+            history.append(msg_dict)
+
+            content = getattr(msg, "content", None) or ""
+            tool_calls = getattr(msg, "tool_calls", None)
+
+            total_input_chars += sum(len(str(m.get("content", ""))) for m in messages)
+            total_output_chars += len(content)
+            _cost_tracker.record(selection.model, extract_usage(response))
+
+            if content:
+                emit(Text(""))
+                emit(_Markdown(content))
+
+            if tool_calls:
+                for ti, tc in enumerate(tool_calls, 1):
+                    fn = tc.function if hasattr(tc, "function") else tc.get("function", {})
+                    name = fn.name if hasattr(fn, "name") else fn.get("name", "")
+                    args_raw = fn.arguments if hasattr(fn, "arguments") else fn.get("arguments", "{}")
+                    args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+
+                    status(f"🔧 {name}")
+
+                    # Safety reflection before dangerous tools (same as classic).
+                    if name in ("run_command", "write_file", "edit_file"):
+                        try:
+                            from opsora_reflect_v2 import reflect
+                            _safety = reflect(
+                                user_input=history[-1].get("content", "") if history else "",
+                                tool_calls=[{"name": name, "arguments": args}],
+                                history=history[-6:],
+                            )
+                            if not _safety.get("safe", True):
+                                risks = ", ".join(_safety.get("risks", [])[:2])
+                                emit(Text(f"⚠ Safety: {risks}", style="bold yellow"))
+                                if get_approval_mode() != ApprovalMode.FULL_AUTO:
+                                    # No interactive approval in the TUI yet — block safely.
+                                    emit(Text("⛔ Butuh approval (mode non-auto). Pakai mode klasik untuk approve.", style="yellow"))
+                                    tc_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
+                                    history.append({"role": "tool", "tool_call_id": tc_id, "content": "BLOCKED by safety check."})
+                                    continue
+                        except Exception:
+                            pass
+
+                    _tool_start = time.time()
+                    output = execute_tool(name, args)
+                    output = _try_error_recovery(name, args, output, history, selection)
+                    _tool_elapsed = time.time() - _tool_start
+                    total_output_chars += len(output)
+                    _auto_diff_after_edit(name, args)
+
+                    # Compact tool renderable for the TUI log.
+                    _args_short = ", ".join(f"{k}={str(v)[:40]}" for k, v in list(args.items())[:3])
+                    _is_err = output.strip().lower().startswith(("error", "traceback")) or "error:" in output.lower()[:80]
+                    _icon = "✗" if _is_err else "✓"
+                    _icon_style = "red" if _is_err else "green"
+                    _head = Text(f"{_icon} {name}", style=f"bold {_icon_style}")
+                    _head.append(f" ({_args_short})" if _args_short else "", style="dim")
+                    _head.append(f"  {_tool_elapsed:.1f}s", style="dim")
+                    emit(_head)
+                    _out_preview = output.strip()
+                    if _out_preview:
+                        _snippet = _out_preview[:600] + ("…" if len(_out_preview) > 600 else "")
+                        emit(Text(_snippet, style="dim"))
+
+                    tc_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
+                    history.append({"role": "tool", "tool_call_id": tc_id, "content": output})
+
+                if _current_todos:
+                    done = sum(1 for t in _current_todos if t.get("status") == "completed")
+                    total = len(_current_todos)
+                    bar_len = 12
+                    filled = int(bar_len * done / total) if total > 0 else 0
+                    bar = "█" * filled + "░" * (bar_len - filled)
+                    emit(Text(f"[{bar}] {done}/{total}", style="dim"))
+                continue
+            else:
+                # Smart auto-continue (same heuristics as classic path).
+                has_pending = any(t.get("status") in ("pending", "in_progress") for t in _current_todos)
+                if has_pending and round_idx < total_rounds - 2:
+                    pending = [t["content"] for t in _current_todos if t.get("status") == "pending"]
+                    in_progress = [t["content"] for t in _current_todos if t.get("status") == "in_progress"]
+                    next_steps = in_progress + pending
+                    if next_steps:
+                        history.append({"role": "user", "content": (
+                            f"Continue with the next step: {next_steps[0]}. "
+                            f"Update todo_write status to in_progress, execute it, then update to completed. "
+                            f"If it fails, try a different approach."
+                        )})
+                        continue
+
+                _incomplete_signals = [
+                    "i need", "let me", "i should", "i will", "we should",
+                    "saya akan", "mari", "selanjutnya", "berikutnya", "langkah berikutnya",
+                    "need to", "should also", "could also", "one more thing",
+                    "first,", "next,", "then,", "after that",
+                ]
+                _is_hedging = content and len(content) < 200 and any(kw in content.lower() for kw in _incomplete_signals)
+                if _is_hedging and round_idx < total_rounds - 3:
+                    history.append({"role": "user", "content": (
+                        "Don't plan or narrate — just execute the next step now. "
+                        "Use tools to do the work directly."
+                    )})
+                    continue
+
+                _todo_count = len(_current_todos)
+                _done_count = sum(1 for t in _current_todos if t.get("status") == "completed")
+                if _todo_count > 0 and _done_count < _todo_count and round_idx < total_rounds - 2:
+                    remaining = [t["content"] for t in _current_todos if t.get("status") != "completed"]
+                    history.append({"role": "user", "content": (
+                        f"There are still {_todo_count - _done_count} unfinished tasks: {remaining[0]}. "
+                        f"Execute it now using tools. Don't just describe what to do — DO it."
+                    )})
+                    continue
+                break
+
+        except Exception as e:
+            emit(Text(f"✗ {redact_display(str(e))}", style="red"))
+            break
+
+    cost_summary = _cost_tracker.session_total()
+    real_tok = cost_summary["total_tokens"]
+    real_cost = cost_summary["total_cost"]
+    if real_tok == 0:
+        real_tok, real_cost = estimate_cost(selection.model, total_input_chars, total_output_chars)
+    emit(Text(f"{status_bar.context_pct}% ctx · {real_tok:,} tok · ${real_cost:.4f} · {get_approval_mode().value}", style="dim"))
+    emit(Text(""))
+
+    return history, selection
+
+
 # ============================================================================
 # Subagent Entry Point
 # ============================================================================
@@ -2508,6 +2692,68 @@ def generate_session_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+def _tui_enabled() -> bool:
+    """Decide whether to use the new Textual TUI (default) or classic REPL.
+
+    Opt out with OPSORA_CLASSIC=1 (or OPSORA_TUI=0). The Textual path also
+    requires a real TTY — piped/non-interactive input always uses the classic
+    single-shot path.
+    """
+    import sys as _sys
+    if os.environ.get("OPSORA_CLASSIC", "").strip() in ("1", "true", "yes", "on"):
+        return False
+    if os.environ.get("OPSORA_TUI", "").strip() in ("0", "false", "no", "off"):
+        return False
+    try:
+        import textual  # noqa: F401
+    except Exception:
+        return False
+    return _sys.stdin.isatty()
+
+
+def _run_textual_tui(selection: Selection, status_bar: StatusBar,
+                     approval_mode: ApprovalMode, session_id: str) -> None:
+    """Launch the persistent Textual TUI (Qwen Code / ink style). Blocks until exit."""
+    from opsora_tui_v2 import OpsoraApp, TuiBackend
+    from opsora_tui import get_provider_health
+
+    history: list[dict] = []
+
+    def _on_turn_done(hist: list, sel: Selection) -> None:
+        try:
+            if len(hist) > 2:
+                title = generate_session_title(hist[:4], sel)
+                save_session(session_id, title, sel.provider, sel.model,
+                             get_approval_mode().value, hist)
+        except Exception:
+            pass
+
+    backend = TuiBackend(
+        run_turn=run_turn_tui,
+        history=history,
+        selection=selection,
+        status_bar=status_bar,
+        health=get_provider_health(),
+        tools_count=len(SAFE_TOOLS),
+        provider=selection.provider,
+        model=selection.model,
+        approval=getattr(approval_mode, "value", str(approval_mode)),
+        on_turn_done=_on_turn_done,
+    )
+    app = OpsoraApp(backend)
+    app.run()
+
+    # Final save on exit.
+    if backend.history:
+        try:
+            title = generate_session_title(backend.history[:4], backend.selection)
+            save_session(session_id, title, backend.selection.provider,
+                         backend.selection.model, get_approval_mode().value,
+                         backend.history)
+        except Exception:
+            pass
+
+
 def main():
     global _mcp_client, selection
 
@@ -2584,11 +2830,33 @@ def main():
             "border": _td.get("border", "#3a3a4a"),
         })
 
+    # Session (uuid4-based id — no timestamp collisions, Phase 1 bugfix)
+    session_id = generate_session_id()
+
+    # New Textual TUI (default) — persistent full-screen layout with the input
+    # pinned at the bottom (Qwen Code / ink style). Falls back to the classic
+    # REPL when disabled (OPSORA_CLASSIC=1) or when textual is unavailable.
+    if _tui_enabled():
+        try:
+            _run_textual_tui(selection, status_bar, approval_mode, session_id)
+            if _mcp_client:
+                _mcp_client.disconnect_all()
+            console.print("\n[dim]Dah.[/dim]")
+            return
+        except Exception as _tui_err:
+            # Safety net: if the new TUI cannot run on this terminal, drop to
+            # the classic REPL instead of crashing the whole CLI.
+            console.print(Text(
+                f"⚠ TUI baru gagal start ({redact_display(str(_tui_err))[:80]}). "
+                f"Jatuh ke mode klasik.", style="yellow"))
+            console.print(Text(
+                "  (Set OPSORA_CLASSIC=1 untuk selalu pakai mode klasik)", style="dim"))
+            # fall through to classic REPL below
+
+    # --- Classic REPL (fallback) ---
     # Welcome
     print_welcome(f"{selection.provider}:{selection.model}", len(SAFE_TOOLS), approval_mode)
 
-    # Session (uuid4-based id — no timestamp collisions, Phase 1 bugfix)
-    session_id = generate_session_id()
     history: list[dict] = []
 
     # Custom completer with descriptions — shows on "/"

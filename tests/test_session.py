@@ -19,6 +19,19 @@ def _sample_messages():
     ]
 
 
+def test_generate_id_rapid_no_duplicates():
+    """10,000 ids generated back-to-back must not collide."""
+    ids = [opsora_session._generate_id() for _ in range(10_000)]
+    assert len(set(ids)) == 10_000
+
+
+def test_generate_id_format_is_12_char_lowercase_hex():
+    """Consumers (sessions.db rows, opsora_v2 display) expect 12-char hex."""
+    import re
+    for _ in range(100):
+        assert re.fullmatch(r"[0-9a-f]{12}", opsora_session._generate_id())
+
+
 def test_save_session_new(sess_db):
     sid = opsora_session._generate_id()
     result = opsora_session.save_session(

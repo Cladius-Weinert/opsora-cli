@@ -1,4 +1,6 @@
 """Comprehensive tests for opsora_cost.py cost tracking."""
+import json
+import logging
 import pytest
 import sys
 from pathlib import Path
@@ -211,6 +213,82 @@ class TestModelCostsDict:
         input_cost, output_cost = opsora_cost._DEFAULT_COST
         assert 0 < input_cost < 5
         assert 0 < output_cost < 5
+
+
+class TestConfigLoading:
+    """Tests for loading pricing from config/model_costs.json."""
+
+    def test_shipped_config_exists_and_is_live(self):
+        """The repo config file parses and its values are reflected in MODEL_COSTS."""
+        assert opsora_cost.CONFIG_PATH.is_file(), f"missing {opsora_cost.CONFIG_PATH}"
+        with open(opsora_cost.CONFIG_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        assert data["models"], "config must define at least one model"
+        for model, rates in data["models"].items():
+            assert model in opsora_cost.MODEL_COSTS
+            assert opsora_cost.MODEL_COSTS[model] == tuple(rates)
+
+    def test_known_model_returns_expected_price(self):
+        """qwen-plus pricing must match the documented $/M-token rates."""
+        assert opsora_cost.MODEL_COSTS["qwen-plus"] == (0.40, 1.20)
+        # 1M input tokens at $0.40/M, 0 output
+        assert opsora_cost._compute_cost("qwen-plus", 1_000_000, 0) == pytest.approx(0.40)
+
+    def test_load_from_custom_file(self, tmp_path):
+        """Values from a config file override pricing."""
+        cfg = tmp_path / "model_costs.json"
+        cfg.write_text(json.dumps({
+            "default_cost": [1.0, 2.0],
+            "models": {"custom-model": [0.5, 1.5]},
+        }), encoding="utf-8")
+        costs, default = opsora_cost._load_model_costs(cfg)
+        assert costs["custom-model"] == (0.5, 1.5)
+        assert default == (1.0, 2.0)
+
+    def test_fallback_when_file_missing(self, tmp_path, monkeypatch, caplog):
+        """Missing config file -> built-in defaults plus a logged warning."""
+        monkeypatch.setattr(opsora_cost, "CONFIG_PATH", tmp_path / "does_not_exist.json")
+        with caplog.at_level(logging.WARNING):
+            costs, default = opsora_cost._load_model_costs()
+        assert costs == opsora_cost._BUILTIN_MODEL_COSTS
+        assert default == opsora_cost._BUILTIN_DEFAULT_COST
+        assert "built-in defaults" in caplog.text
+
+    def test_fallback_when_file_malformed(self, tmp_path, monkeypatch, caplog):
+        """Unparseable JSON -> built-in defaults plus a logged warning."""
+        cfg = tmp_path / "model_costs.json"
+        cfg.write_text("{this is not valid json", encoding="utf-8")
+        monkeypatch.setattr(opsora_cost, "CONFIG_PATH", cfg)
+        with caplog.at_level(logging.WARNING):
+            costs, default = opsora_cost._load_model_costs()
+        assert costs == opsora_cost._BUILTIN_MODEL_COSTS
+        assert default == opsora_cost._BUILTIN_DEFAULT_COST
+        assert "built-in defaults" in caplog.text
+
+    def test_fallback_when_structure_wrong(self, tmp_path):
+        """Valid JSON without a 'models' object -> built-in defaults."""
+        cfg = tmp_path / "model_costs.json"
+        cfg.write_text(json.dumps({"prices": {"qwen-plus": [1, 2]}}), encoding="utf-8")
+        costs, default = opsora_cost._load_model_costs(cfg)
+        assert costs == opsora_cost._BUILTIN_MODEL_COSTS
+        assert default == opsora_cost._BUILTIN_DEFAULT_COST
+
+    def test_malformed_entries_skipped_not_fatal(self, tmp_path):
+        """Bad individual entries are skipped; valid ones still load."""
+        cfg = tmp_path / "model_costs.json"
+        cfg.write_text(json.dumps({
+            "models": {
+                "good": [1.0, 2.0],
+                "one_value": [1.0],
+                "negative": [-1.0, 2.0],
+                "not_numbers": ["a", "b"],
+            },
+        }), encoding="utf-8")
+        costs, _ = opsora_cost._load_model_costs(cfg)
+        assert costs["good"] == (1.0, 2.0)
+        assert "one_value" not in costs
+        assert "negative" not in costs
+        assert "not_numbers" not in costs
 
 
 class TestEntryDataclass:

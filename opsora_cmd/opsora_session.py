@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -49,9 +50,22 @@ def _conn() -> sqlite3.Connection:
 
 
 def _generate_id() -> str:
-    import hashlib
-    raw = f"{time.time()}-{id(object())}"
-    return hashlib.sha256(raw.encode()).hexdigest()[:12]
+    """Generate a unique session id as 12 lowercase hex chars (uuid4-based).
+
+    The 12-char hex format matches existing ``sessions.id`` rows and the
+    session ids generated elsewhere in the CLI, so old and new ids coexist.
+
+    The previous implementation hashed ``time.time()`` plus ``id(object())``;
+    CPython reuses the addresses of immediately-freed temporaries, so rapid
+    calls could produce identical inputs and therefore colliding ids.
+
+    Residual collision probability: uuid4 truncated to 48 bits gives a
+    birthday-collision probability of ~n^2 / 2^49 — about 1.8e-7 for 10,000
+    ids, reaching 50% only near ~16.7M sessions. That is negligible for a
+    local session store, and ``sessions.id`` is a PRIMARY KEY, so any actual
+    collision would raise instead of silently overwriting a session.
+    """
+    return uuid.uuid4().hex[:12]
 
 
 @dataclass

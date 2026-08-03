@@ -1,17 +1,85 @@
-"""Opsora Cost Tracker — Real token/cost tracking from API responses."""
+"""Opsora Cost Tracker — Real token/cost tracking from API responses.
+
+Per-model pricing lives in ``config/model_costs.json`` at the repository
+root and is loaded at import time. If that file is missing or malformed the
+module falls back to the built-in pricing table below (logging a warning),
+so tracker behavior never crashes on configuration problems.
+"""
 from __future__ import annotations
+import json
+import logging
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
 
+logger = logging.getLogger(__name__)
+
+# Path to the external pricing config. Tests may monkeypatch this.
+CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "model_costs.json"
+
 # Pricing: (input $/M tokens, output $/M tokens)
-MODEL_COSTS: dict[str, tuple[float, float]] = {
+# Built-in fallback table, mirroring config/model_costs.json, used when the
+# config file is missing or malformed so behavior stays unchanged.
+_BUILTIN_MODEL_COSTS: dict[str, tuple[float, float]] = {
     "qwen-plus": (0.40, 1.20), "qwen-turbo": (0.05, 0.20), "qwen-max": (2.00, 6.00),
     "qwen3-coder-flash": (0.15, 0.60),
     "meta/llama-3.1-70b-instruct": (0.35, 0.70), "meta/llama-3.1-8b-instruct": (0.05, 0.10),
     "hy3": (0.132, 0.132), "kimi-k3": (0.20, 0.60), "deepseek-v4-flash": (0.02, 0.02),
 }
-_DEFAULT_COST = (0.30, 0.60)
+_BUILTIN_DEFAULT_COST: tuple[float, float] = (0.30, 0.60)
+
+
+def _valid_rate(value: Any) -> bool:
+    """True when ``value`` is a non-negative number usable as a $/M-token rate."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
+
+
+def _load_model_costs(path: Optional[Path] = None) -> tuple[dict[str, tuple[float, float]], tuple[float, float]]:
+    """Load per-model pricing from ``path`` (default: :data:`CONFIG_PATH`).
+
+    Returns ``(model_costs, default_cost)`` where rates are
+    ``(input $/M tokens, output $/M tokens)`` tuples. Entries from the file
+    override the built-in table; individual malformed entries are skipped
+    with a warning. If the file is missing, unreadable, or structurally
+    invalid, a warning is logged and the built-in table is returned.
+    This function never raises.
+    """
+    target = Path(path) if path is not None else CONFIG_PATH
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        logger.warning("Model cost config not found at %s; using built-in defaults", target)
+        return dict(_BUILTIN_MODEL_COSTS), _BUILTIN_DEFAULT_COST
+    except (OSError, ValueError) as e:  # ValueError covers json.JSONDecodeError
+        logger.warning("Model cost config at %s is unreadable or malformed (%s); using built-in defaults", target, e)
+        return dict(_BUILTIN_MODEL_COSTS), _BUILTIN_DEFAULT_COST
+
+    if not isinstance(data, dict) or not isinstance(data.get("models"), dict):
+        logger.warning(
+            "Model cost config at %s has unexpected structure (need an object with a 'models' object); "
+            "using built-in defaults", target)
+        return dict(_BUILTIN_MODEL_COSTS), _BUILTIN_DEFAULT_COST
+
+    costs = dict(_BUILTIN_MODEL_COSTS)
+    for model, rates in data["models"].items():
+        if (isinstance(rates, (list, tuple)) and len(rates) == 2 and all(_valid_rate(v) for v in rates)):
+            costs[str(model)] = (float(rates[0]), float(rates[1]))
+        else:
+            logger.warning("Skipping malformed pricing entry for model %r in %s", model, target)
+
+    default_cost = _BUILTIN_DEFAULT_COST
+    dc = data.get("default_cost")
+    if dc is not None:
+        if isinstance(dc, (list, tuple)) and len(dc) == 2 and all(_valid_rate(v) for v in dc):
+            default_cost = (float(dc[0]), float(dc[1]))
+        else:
+            logger.warning("Skipping malformed 'default_cost' entry in %s", target)
+
+    return costs, default_cost
+
+
+MODEL_COSTS, _DEFAULT_COST = _load_model_costs()
 
 @dataclass
 class _Entry:

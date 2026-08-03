@@ -105,8 +105,8 @@ fi
 # Try installed package first, then local repo
 if python3 -c "import opsora_v2" 2>/dev/null; then
     exec python3 -c "from opsora_v2 import main; main()" "$@"
-elif [ -f "$HOME/.opsora/repo/cmd/opsora_v2.py" ]; then
-    exec python3 "$HOME/.opsora/repo/cmd/opsora_v2.py" "$@"
+elif [ -f "$HOME/.opsora/repo/opsora_cmd/opsora_v2.py" ]; then
+    exec python3 "$HOME/.opsora/repo/opsora_cmd/opsora_v2.py" "$@"
 else
     echo "Error: Opsora CLI not found. Reinstall with:"
     echo "  curl -fsSL https://raw.githubusercontent.com/opsora/opsora-cli/main/install.sh | bash"

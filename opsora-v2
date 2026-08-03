@@ -8,4 +8,4 @@ if [ -f "$HOME/.opsora_env" ]; then
 fi
 
 # Use system Python (has all deps)
-exec python3 "$HOME/opsora-cli/cmd/opsora_v2.py" "$@"
+exec python3 "$HOME/opsora-cli/opsora_cmd/opsora_v2.py" "$@"

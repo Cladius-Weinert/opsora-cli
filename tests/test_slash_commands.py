@@ -95,10 +95,12 @@ class TestHandleCommand:
 
     def test_mode_command(self, mock_setup, status_bar, selection, history):
         """Test /mode command."""
-        mock_setup['cycle'].return_value = opsora_v2.ApprovalMode.PLAN_ONLY
+        # ApprovalMode is SUGGEST/AUTO_EDIT/FULL_AUTO since the Phase 1 TUI
+        # refactor (PLAN_ONLY was removed) — cycle to SUGGEST here.
+        mock_setup['cycle'].return_value = opsora_v2.ApprovalMode.SUGGEST
         cont, _, _ = handle_command("/mode", history, selection, status_bar, "sess1")
         assert cont is True
-        mock_setup['set_approval'].assert_called_with(opsora_v2.ApprovalMode.PLAN_ONLY)
+        mock_setup['set_approval'].assert_called_with(opsora_v2.ApprovalMode.SUGGEST)
 
     def test_model_command_valid(self, mock_setup, status_bar, selection, history):
         """Test /model command with valid provider."""
@@ -225,6 +227,7 @@ class TestHandleCommand:
                 "status output"  # git_status
             ]
             with patch('opsora_v2.run_agent_turn') as mock_agent:
+                mock_agent.return_value = (history, selection)
                 cont, _, _ = handle_command("/review", history, selection, status_bar, "sess1")
                 assert cont is True
                 assert len(history) > 1  # Should have added review prompt
@@ -242,6 +245,7 @@ class TestHandleCommand:
     def test_deploy_command(self, mock_setup, status_bar, selection, history):
         """Test /deploy command."""
         with patch('opsora_v2.run_agent_turn') as mock_agent:
+            mock_agent.return_value = (history, selection)
             cont, _, _ = handle_command("/deploy render", history, selection, status_bar, "sess1")
             assert cont is True
             assert len(history) > 1
@@ -251,6 +255,7 @@ class TestHandleCommand:
         with patch('opsora_v2.execute_tool', return_value="code content") as mock_exec:
             with patch('opsora_v2._validate_path'):
                 with patch('opsora_v2.run_agent_turn') as mock_agent:
+                    mock_agent.return_value = (history, selection)
                     cont, _, _ = handle_command("/explain test.py my_function", history, selection, status_bar, "sess1")
                     assert cont is True
                     mock_exec.assert_called_with("read_file", {"filepath": "test.py"})
@@ -265,18 +270,21 @@ class TestHandleCommand:
         with patch('opsora_v2.execute_tool', return_value="code content") as mock_exec:
             with patch('opsora_v2._validate_path'):
                 with patch('opsora_v2.run_agent_turn') as mock_agent:
+                    mock_agent.return_value = (history, selection)
                     cont, _, _ = handle_command("/refactor test.py", history, selection, status_bar, "sess1")
                     assert cont is True
 
     def test_test_command(self, mock_setup, status_bar, selection, history):
         """Test /test command."""
         with patch('opsora_v2.run_agent_turn') as mock_agent:
+            mock_agent.return_value = (history, selection)
             cont, _, _ = handle_command("/test test.py", history, selection, status_bar, "sess1")
             assert cont is True
 
     def test_fix_ci_command(self, mock_setup, status_bar, selection, history):
         """Test /fix-ci command."""
         with patch('opsora_v2.run_agent_turn') as mock_agent:
+            mock_agent.return_value = (history, selection)
             cont, _, _ = handle_command("/fix-ci", history, selection, status_bar, "sess1")
             assert cont is True
 
@@ -434,6 +442,7 @@ class TestHandleCommand:
         """Test /loop command."""
         with patch('opsora_v2.is_aborted', side_effect=[False, False, True]):
             with patch('opsora_v2.run_agent_turn') as mock_agent:
+                mock_agent.return_value = (history, selection)
                 cont, _, _ = handle_command("/loop test task", history, selection, status_bar, "sess1")
                 assert cont is True
 

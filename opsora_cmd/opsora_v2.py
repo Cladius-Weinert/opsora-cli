@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -31,7 +32,7 @@ except (ImportError, Exception):
     from openai_lite import OpenAI
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.completion import WordCompleter, Completer, Completion
 from prompt_toolkit.styles import Style as PromptStyle
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.formatted_text import HTML
@@ -66,6 +67,7 @@ from opsora_tui import (
     toggle_verbose,
 )
 from opsora_session import (
+    Session,
     delete_session,
     list_sessions,
     load_session,
@@ -75,6 +77,16 @@ from opsora_session import (
 from opsora_subagent import SubagentOrchestrator
 from opsora_mcp import MCPClient
 from problem_solver import solve_problem
+# Phase 1: imported at module level (stdlib-only, no network at import time)
+# so slash-command handlers are patchable in tests via opsora_v2.<name>.
+from opsora_new_tools import web_search, db_query
+from opsora_nvidia import (
+    analyze_image,
+    analyze_screenshot,
+    check_command_safety,
+    generate_embedding,
+    translate_text,
+)
 
 # v3.1 upgrades (lazy imports where possible for startup speed)
 # MODEL_COSTS/_DEFAULT_COST: single source of truth for pricing lives in
@@ -731,26 +743,56 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
             repo_path = args.get("path", str(WORKSPACE_ROOT))
             if not Path(repo_path).is_absolute():
                 repo_path = str(WORKSPACE_ROOT / repo_path)
-            test_filter = args.get("filter", "")
+            if not Path(repo_path).is_dir():
+                return f"ERROR: Not a directory: {repo_path}"
             rp = Path(repo_path)
 
-            # Auto-detect test framework
-            cmd = None
+            # SECURITY (Phase 1): the filter is parsed into argv tokens and
+            # validated — it is never interpolated into a shell string. Only
+            # "-k <expr>" is accepted as an option (pytest keyword filter);
+            # every other token must be a test path / node id. Anything else
+            # (arbitrary options, shell metacharacters) is rejected.
+            filter_args: list[str] = []
+            test_filter = str(args.get("filter", "") or "").strip()
+            if test_filter:
+                try:
+                    tokens = shlex.split(test_filter)
+                except ValueError:
+                    return f"ERROR: Could not parse test filter: {test_filter!r}"
+                i = 0
+                while i < len(tokens):
+                    tok = tokens[i]
+                    if tok == "-k":
+                        expr = " ".join(tokens[i + 1:])
+                        if not expr or not re.fullmatch(r"[A-Za-z0-9_ ./:\[\]=,~+()-]+", expr):
+                            return f"ERROR: Invalid -k filter expression: {expr!r}"
+                        filter_args.extend(["-k", expr])
+                        break
+                    if tok.startswith("-"):
+                        return f"ERROR: Unsupported pytest option in filter: {tok}"
+                    if not re.fullmatch(r"[A-Za-z0-9_./:\[\]=,~+-]+", tok):
+                        return f"ERROR: Invalid test filter: {tok!r}"
+                    filter_args.append(tok)
+                    i += 1
+
+            # Auto-detect test framework (argv lists + cwd, no shell=True)
+            cmd: Optional[list[str]] = None
             if (rp / "pytest.ini").exists() or (rp / "pyproject.toml").exists() or (rp / "setup.py").exists() or list(rp.glob("**/test_*.py")):
-                cmd = f"cd {repo_path} && python3 -m pytest {test_filter} -x -q --tb=short 2>&1 | head -100"
+                cmd = ["python3", "-m", "pytest", *filter_args, "-x", "-q", "--tb=short"]
             elif (rp / "package.json").exists():
-                cmd = f"cd {repo_path} && npm test 2>&1 | head -100"
+                cmd = ["npm", "test"]
             elif (rp / "Cargo.toml").exists():
-                cmd = f"cd {repo_path} && cargo test 2>&1 | head -100"
+                cmd = ["cargo", "test"]
             elif (rp / "go.mod").exists():
-                cmd = f"cd {repo_path} && go test ./... 2>&1 | head -100"
+                cmd = ["go", "test", "./..."]
             elif (rp / "Makefile").exists():
-                cmd = f"cd {repo_path} && make test 2>&1 | head -100"
+                cmd = ["make", "test"]
             else:
                 return "No test framework detected. Supported: pytest, npm test, cargo test, go test, make test."
 
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, cwd=repo_path)
             output = (result.stdout or "") + (result.stderr or "")
+            output = "\n".join(output.splitlines()[:100])  # was: | head -100
             return output.strip()[:TOOL_MAX_OUTPUT] or f"Tests exited with code {result.returncode}."
 
         if name == "git_commit":
@@ -778,24 +820,34 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
             repo_path = args.get("path", str(WORKSPACE_ROOT))
             if not Path(repo_path).is_absolute():
                 repo_path = str(WORKSPACE_ROOT / repo_path)
-            fix = "--fix" if args.get("fix") else ""
             rp = Path(repo_path)
+            # SECURITY (Phase 1): validate the target, then run the linter as
+            # an argv list with cwd — the path is never put into a shell string.
+            if rp.is_dir():
+                lint_cwd, target = str(rp), "."
+            elif rp.is_file():
+                lint_cwd, target = str(rp.parent), str(rp)
+            else:
+                return f"ERROR: Not a file or directory: {repo_path}"
+            fix = ["--fix"] if args.get("fix") else []
 
-            # Auto-detect linter
-            cmd = None
+            # Auto-detect linter (argv lists + cwd, no shell=True)
+            cmd: Optional[list[str]] = None
             if shutil.which("ruff"):
-                cmd = f"cd {repo_path} && ruff check {fix} . 2>&1 | head -60"
+                cmd = ["ruff", "check", *fix, target]
             elif shutil.which("flake8"):
-                cmd = f"cd {repo_path} && flake8 . 2>&1 | head -60"
-            elif (rp / "package.json").exists() and shutil.which("npx"):
-                cmd = f"cd {repo_path} && npx eslint {fix} . 2>&1 | head -60"
+                cmd = ["flake8", target]
+            elif Path(lint_cwd, "package.json").exists() and shutil.which("npx"):
+                cmd = ["npx", "eslint", *fix, target]
             elif shutil.which("pylint"):
-                cmd = f"cd {repo_path} && pylint {repo_path} 2>&1 | head -60"
+                cmd = ["pylint", target]
             else:
                 return "No linter found. Install: ruff, flake8, eslint, or pylint."
 
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
-            return (result.stdout or result.stderr or "No issues found.").strip()[:TOOL_MAX_OUTPUT]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=lint_cwd)
+            output = (result.stdout or result.stderr or "No issues found.").strip()
+            output = "\n".join(output.splitlines()[:60])  # was: | head -60
+            return output[:TOOL_MAX_OUTPUT]
 
         if name == "image_read":
             fp = _validate_path(str(args["filepath"]))
@@ -840,10 +892,12 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
             return info
 
         if name == "pip_info":
-            pkg = args["package"]
+            pkg = str(args["package"])
+            # SECURITY (Phase 1): argv list — no shell involved, so the
+            # package name needs no quoting and cannot inject anything.
             result = subprocess.run(
-                f"pip show {shlex.quote(pkg)} 2>&1",
-                shell=True, capture_output=True, text=True, timeout=15,
+                ["pip", "show", pkg],
+                capture_output=True, text=True, timeout=15,
             )
             return (result.stdout or result.stderr or f"Package '{pkg}' not found.").strip()
 
@@ -883,7 +937,9 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
 
         return f"Unknown tool: {name}"
     except Exception as e:
-        return f"Tool error: {e}"
+        # SECURITY (Phase 1): tool exceptions can carry provider/network
+        # details (URLs, headers) — redact before the text reaches the UI.
+        return f"Tool error: {redact_display(str(e))}"
 
 
 # ============================================================================
@@ -948,6 +1004,38 @@ SYSTEM_PROMPT = (
 _mcp_client: Optional[MCPClient] = None
 _current_todos: list[dict] = []
 _project_context: str = ""
+
+
+def reset_globals() -> None:
+    """Reset all module-level mutable globals to their import-time state.
+
+    Phase 1 (architect task 8): lazily-created provider clients, the health
+    cache, cost/plugin singletons, and session state persist across unit
+    tests and pollute results (e.g. a client created against one patched
+    environment leaks into the next test). Tests should call this from an
+    autouse fixture — see tests/test_v2_core.py (the fixture should move to
+    tests/conftest.py so it applies to the whole suite).
+
+    Note: SAFE_TOOLS is intentionally NOT reset — plugin schemas are appended
+    to it exactly once at import time, and re-appending would duplicate them.
+    """
+    global _nvidia_client, _alibaba_client, _model_studio_client
+    global _openai_client, _tokenhub_client, _opsora_api_client
+    global _provider_health_cache, _cost_tracker, _plugin_manager
+    global _mcp_client, _current_todos, _project_context
+    _nvidia_client = None
+    _alibaba_client = None
+    _model_studio_client = None
+    _openai_client = None
+    _tokenhub_client = None
+    _opsora_api_client = None
+    _provider_health_cache = {}
+    _cost_tracker = CostTracker()
+    _plugin_manager = PluginManager()
+    _plugin_manager.discover()
+    _mcp_client = None
+    _current_todos = []
+    _project_context = ""
 
 
 def load_project_context() -> str:
@@ -1111,6 +1199,10 @@ def compress_context(messages: list[dict], selection: Selection) -> list[dict]:
                 summary_parts.append(f"[called {fn.get('name', '?')}]")
         elif role == "assistant" and content:
             compressed.append(m)
+        elif role == "user" and content:
+            # Phase 1: keep old user turns — dropping them silently loses
+            # conversation intent (they are short relative to tool output).
+            compressed.append(m)
     if summary_parts:
         compressed.append({
             "role": "system",
@@ -1244,8 +1336,10 @@ def _try_error_recovery(name: str, args: dict, output: str, history: list[dict],
                 return output
             
             console.print(f"  [dim cyan]⚡ auto-install: pip install {pip_pkg}[/dim]")
+            # SECURITY (Phase 1): argv list, and pip_pkg is allowlist-gated
+            # above — no shell involved.
             install_result = subprocess.run(
-                f"pip install --no-cache-dir {pip_pkg}", shell=True,
+                ["pip", "install", "--no-cache-dir", pip_pkg],
                 capture_output=True, text=True, timeout=120,
             )
             if install_result.returncode == 0:
@@ -1509,7 +1603,9 @@ def run_agent_turn(history: list[dict], selection: Selection, status_bar: Status
                 break
 
         except Exception as e:
-            console.print(Text(f"✗ {e}", style="red"))
+            # SECURITY (Phase 1): provider/network errors can echo URLs,
+            # headers or key fragments — redact before display.
+            console.print(Text(f"✗ {redact_display(str(e))}", style="red"))
             break
 
     # Token/cost summary (v3.1: real tracking from API)
@@ -1941,7 +2037,8 @@ def handle_command(value: str, history: list[dict], selection: Selection, status
             console.print()
             
         except Exception as e:
-            console.print(Text(f"  ✗ Gagal menjalankan solver: {e}", style="red"))
+            # SECURITY (Phase 1): solver errors can carry provider details.
+            console.print(Text(f"  ✗ Gagal menjalankan solver: {redact_display(str(e))}", style="red"))
         return True, None, None
 
     # --- Autonomous Agent commands ---
@@ -1975,7 +2072,8 @@ def handle_command(value: str, history: list[dict], selection: Selection, status
             abort_agent()
             console.print(Text("\n  ⏹ Aborted.", style="yellow"))
         except Exception as e:
-            console.print(Text(f"  ✗ Agent error: {e}", style="red"))
+            # SECURITY (Phase 1): agent errors can carry provider details.
+            console.print(Text(f"  ✗ Agent error: {redact_display(str(e))}", style="red"))
         return True, None, None
 
     if cmd == "/abort":
@@ -2015,7 +2113,6 @@ def handle_command(value: str, history: list[dict], selection: Selection, status
         if not query:
             console.print(Text("  usage: /search <query>", style="dim"))
             return True, None, None
-        from opsora_new_tools import web_search
         result = web_search(query)
         console.print(Text(f"  🌐 {query}", style="bold dim"))
         console.print(Text(f"    {result[:5000]}", style="dim"))
@@ -2026,7 +2123,6 @@ def handle_command(value: str, history: list[dict], selection: Selection, status
         if not sql:
             console.print(Text("  usage: /query <SQL>", style="dim"))
             return True, None, None
-        from opsora_new_tools import db_query
         result = db_query(sql)
         console.print(Text(f"  🗄 {sql[:60]}", style="bold dim"))
         console.print(Text(f"    {result[:5000]}", style="dim"))
@@ -2097,7 +2193,6 @@ def handle_command(value: str, history: list[dict], selection: Selection, status
             console.print(Text("  usage: /translate <text to Indonesian>", style="dim"))
             console.print(Text("  usage: /translate en <Indonesian text>", style="dim"))
             return True, None, None
-        from opsora_nvidia import translate_text
         # Detect if translating TO English
         target = "Indonesian"
         if parts[1].lower() == "en":
@@ -2111,7 +2206,6 @@ def handle_command(value: str, history: list[dict], selection: Selection, status
     if cmd == "/vision":
         path = parts[1] if len(parts) > 1 else ""
         prompt = " ".join(parts[2:]) if len(parts) > 2 else "Describe this image in detail. What do you see?"
-        from opsora_nvidia import analyze_image, analyze_screenshot
         console.print(Text("  👁️ Analyzing…", style="dim"))
         if path:
             result = analyze_image(path, prompt)
@@ -2125,7 +2219,6 @@ def handle_command(value: str, history: list[dict], selection: Selection, status
         if not command:
             console.print(Text("  usage: /safety <shell command to check>", style="dim"))
             return True, None, None
-        from opsora_nvidia import check_command_safety
         console.print(Text(f"  🛡️ Checking: {command[:60]}", style="dim"))
         result = check_command_safety(command)
         if result["safe"]:
@@ -2140,7 +2233,6 @@ def handle_command(value: str, history: list[dict], selection: Selection, status
         if not text:
             console.print(Text("  usage: /embed <text to generate embedding>", style="dim"))
             return True, None, None
-        from opsora_nvidia import generate_embedding
         console.print(Text("  🔍 Generating embedding…", style="dim"))
         vec = generate_embedding(text)
         if vec:
@@ -2191,6 +2283,131 @@ def _show_tools() -> None:
 
 
 # ============================================================================
+# Slash-command completion
+# ============================================================================
+
+# Phase 1: moved out of main() to module level so the REPL's "/"
+# autocomplete is importable/patchable (it was accidentally nested).
+_SLASH_COMMANDS = [
+    ("/help", "tampilin commands"),
+    ("/status", "provider & tools"),
+    ("/model", "ganti model"),
+    ("/models", "list semua model"),
+    ("/tools", "daftar tools"),
+    ("/mode", "ganti approval mode"),
+    ("/tree", "struktur folder"),
+    ("/sessions", "list session"),
+    ("/resume", "lanjutin session"),
+    ("/save", "simpan session"),
+    ("/new", "obrolan baru"),
+    ("/run", "jalankan command"),
+    ("/read", "baca file"),
+    ("/diff", "bandingin 2 file"),
+    ("/memory", "cari di memory"),
+    ("/mcp", "MCP server status"),
+    ("/agent", "spawn sub-agents"),
+    ("/auto", "autonomous agent"),
+    ("/loop", "retry sampai sukses"),
+    ("/abort", "stop agent"),
+    ("/solve", "problem solver"),
+    ("/search", "web search"),
+    ("/query", "SQLite query"),
+    ("/theme", "ganti warna"),
+    ("/plugins", "list plugins"),
+    ("/cost", "session cost"),
+    ("/verbose", "toggle verbose"),
+    ("/review", "review code"),
+    ("/deploy", "deploy project"),
+    ("/explain", "explain code"),
+    ("/refactor", "refactor code"),
+    ("/test", "generate & run tests"),
+    ("/fix-ci", "fix CI failures"),
+    ("/translate", "translate EN↔ID"),
+    ("/vision", "analyze screenshot"),
+    ("/safety", "check command safety"),
+    ("/embed", "generate embedding"),
+    ("/copy", "copy ke clipboard"),
+    ("/fork", "fork session"),
+    ("/clear", "bersihin layar"),
+    ("/exit", "keluar"),
+]
+
+
+def _available_model_completions() -> list[tuple[str, str]]:
+    """Live list of (provider/model, provider) pairs for completion."""
+    models = []
+    for prov in ("alibaba", "nvidia", "tokenhub", "model_studio", "openai", "local"):
+        if is_provider_available(prov):
+            for m in PROVIDER_MODELS.get(prov, "").split(","):
+                m = m.strip()
+                if m:
+                    models.append((f"{prov}/{m}", prov))
+    return models
+
+
+class SlashCompleter(Completer):
+    """Smart auto-complete for slash commands, models, and themes."""
+
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        if not text.startswith("/"):
+            return
+
+        # Model sub-completion: "/model " shows providers, "/model alibaba/" shows models
+        if text.lower().startswith("/model "):
+            available_models = _available_model_completions()
+            after = text[7:]  # after "/model "
+            if "/" in after:
+                # Show models for specific provider: "/model alibaba/"
+                prov = after.split("/")[0]
+                partial = after.split("/", 1)[1].lower() if len(after.split("/")) > 1 else ""
+                for full, p in available_models:
+                    if p == prov:
+                        model_name = full.split("/", 1)[1]
+                        if model_name.lower().startswith(partial):
+                            yield Completion(
+                                f"/model {full}",
+                                start_position=-len(text),
+                                display_meta=p,
+                            )
+            else:
+                # Show providers: "/model "
+                seen = set()
+                for full, prov in available_models:
+                    if prov not in seen and prov.startswith(after.lower()):
+                        seen.add(prov)
+                        yield Completion(
+                            f"/model {prov}/",
+                            start_position=-len(text),
+                            display_meta=f"{len([m for m, p in available_models if p == prov])} models",
+                        )
+            return
+
+        # Theme sub-completion: "/theme " shows theme names
+        if text.lower().startswith("/theme "):
+            after = text[7:].lower()
+            for t in list_themes():
+                if t.startswith(after):
+                    theme = get_theme(t)
+                    yield Completion(
+                        f"/theme {t}",
+                        start_position=-len(text),
+                        display_meta=theme.get("name", ""),
+                    )
+            return
+
+        # Default: command completion
+        word = text.lower()
+        for cmd, desc in _SLASH_COMMANDS:
+            if cmd.startswith(word) or word == "/":
+                yield Completion(
+                    cmd,
+                    start_position=-len(word),
+                    display_meta=desc,
+                )
+
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -2237,7 +2454,8 @@ def main():
         try:
             history, selection = run_agent_turn(history, selection, status_bar)
         except Exception as e:
-            console.print(Text(f"Error: {e}", style="red"))
+            # SECURITY (Phase 1): redact provider/network error details.
+            console.print(Text(f"Error: {redact_display(str(e))}", style="red"))
         return
 
     # --- Interactive mode ---
@@ -2288,119 +2506,7 @@ def main():
     history: list[dict] = []
 
     # Custom completer with descriptions — shows on "/"
-    from prompt_toolkit.completion import Completer, Completion
-
-    _SLASH_COMMANDS = [
-        ("/help", "tampilin commands"),
-        ("/status", "provider & tools"),
-        ("/model", "ganti model"),
-        ("/models", "list semua model"),
-        ("/tools", "daftar tools"),
-        ("/mode", "ganti approval mode"),
-        ("/tree", "struktur folder"),
-        ("/sessions", "list session"),
-        ("/resume", "lanjutin session"),
-        ("/save", "simpan session"),
-        ("/new", "obrolan baru"),
-        ("/run", "jalankan command"),
-        ("/read", "baca file"),
-        ("/diff", "bandingin 2 file"),
-        ("/memory", "cari di memory"),
-        ("/mcp", "MCP server status"),
-        ("/agent", "spawn sub-agents"),
-        ("/auto", "autonomous agent"),
-        ("/loop", "retry sampai sukses"),
-        ("/abort", "stop agent"),
-        ("/solve", "problem solver"),
-        ("/search", "web search"),
-        ("/query", "SQLite query"),
-        ("/theme", "ganti warna"),
-        ("/plugins", "list plugins"),
-        ("/cost", "session cost"),
-        ("/verbose", "toggle verbose"),
-        ("/review", "review code"),
-        ("/deploy", "deploy project"),
-        ("/explain", "explain code"),
-        ("/refactor", "refactor code"),
-        ("/test", "generate & run tests"),
-        ("/fix-ci", "fix CI failures"),
-        ("/translate", "translate EN↔ID"),
-        ("/vision", "analyze screenshot"),
-        ("/safety", "check command safety"),
-        ("/embed", "generate embedding"),
-        ("/copy", "copy ke clipboard"),
-        ("/fork", "fork session"),
-        ("/clear", "bersihin layar"),
-        ("/exit", "keluar"),
-    ]
-
-    # Build dynamic model list for completer
-    _available_models = []
-    for prov in ("alibaba", "nvidia", "tokenhub", "model_studio", "openai", "local"):
-        if is_provider_available(prov):
-            for m in PROVIDER_MODELS.get(prov, "").split(","):
-                m = m.strip()
-                if m:
-                    _available_models.append((f"{prov}/{m}", prov))
-
-    class SlashCompleter(Completer):
-        def get_completions(self, document, complete_event):
-            text = document.text_before_cursor
-            if not text.startswith("/"):
-                return
-
-            # Model sub-completion: "/model " shows providers, "/model alibaba/" shows models
-            if text.lower().startswith("/model "):
-                after = text[7:]  # after "/model "
-                if "/" in after:
-                    # Show models for specific provider: "/model alibaba/"
-                    prov = after.split("/")[0]
-                    partial = after.split("/", 1)[1].lower() if len(after.split("/")) > 1 else ""
-                    for full, p in _available_models:
-                        if p == prov:
-                            model_name = full.split("/", 1)[1]
-                            if model_name.lower().startswith(partial):
-                                yield Completion(
-                                    f"/model {full}",
-                                    start_position=-len(text),
-                                    display_meta=p,
-                                )
-                else:
-                    # Show providers: "/model "
-                    seen = set()
-                    for full, prov in _available_models:
-                        if prov not in seen and prov.startswith(after.lower()):
-                            seen.add(prov)
-                            yield Completion(
-                                f"/model {prov}/",
-                                start_position=-len(text),
-                                display_meta=f"{len([m for m, p in _available_models if p == prov])} models",
-                            )
-                return
-
-            # Theme sub-completion: "/theme " shows theme names
-            if text.lower().startswith("/theme "):
-                after = text[7:].lower()
-                for t in list_themes():
-                    if t.startswith(after):
-                        theme = get_theme(t)
-                        yield Completion(
-                            f"/theme {t}",
-                            start_position=-len(text),
-                            display_meta=theme.get("name", ""),
-                        )
-                return
-
-            # Default: command completion
-            word = text.lower()
-            for cmd, desc in _SLASH_COMMANDS:
-                if cmd.startswith(word) or word == "/":
-                    yield Completion(
-                        cmd,
-                        start_position=-len(word),
-                        display_meta=desc,
-                    )
-
+    # (SlashCompleter lives at module level since Phase 1.)
     completer = SlashCompleter()
 
     while True:
@@ -2461,7 +2567,8 @@ def main():
         except EOFError:
             break
         except Exception as e:
-            console.print(Text(f"✗ {e}", style="red"))
+            # SECURITY (Phase 1): redact provider/network error details.
+            console.print(Text(f"✗ {redact_display(str(e))}", style="red"))
 
     # Cleanup
     if _mcp_client:

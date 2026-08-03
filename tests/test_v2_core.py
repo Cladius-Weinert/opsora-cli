@@ -496,5 +496,50 @@ class TestConstants:
         assert len(opsora_v2.CODING_MODELS) > 0
 
 
+class TestRedactionWiring:
+    """Phase 1 task 5: error paths in opsora_v2 redact secrets before display."""
+
+    def test_tool_error_is_redacted(self):
+        """The execute_tool catch-all must mask credentials in exceptions."""
+        secret = "nvapi-" + "a1b2c3d4e5f6g7h8" * 3
+        with patch(
+            "opsora_v2._validate_path",
+            side_effect=RuntimeError(f"provider rejected key {secret}"),
+        ):
+            result = opsora_v2.execute_tool("read_file", {"filepath": "x.py"})
+        assert result.startswith("Tool error:")
+        assert secret not in result
+        assert "nvapi-****" in result  # masked but debuggable
+
+    def test_error_display_paths_use_redaction(self):
+        """User-facing exception prints route through redact_display."""
+        src = Path(opsora_v2.__file__).read_text(encoding="utf-8")
+        assert 'Text(f"✗ {redact_display(str(e))}"' in src
+        assert 'Text(f"Error: {redact_display(str(e))}"' in src
+        assert 'f"Tool error: {redact_display(str(e))}"' in src
+
+
+class TestResetGlobals:
+    """Phase 1 task 8: reset_globals restores import-time state."""
+
+    def test_reset_clears_clients_and_session_state(self):
+        opsora_v2._nvidia_client = object()  # simulate a leaked client
+        opsora_v2._provider_health_cache["x"] = (True, 0)
+        opsora_v2._current_todos.append({"id": "1", "content": "x", "status": "pending"})
+        opsora_v2._project_context = "leaked context"
+
+        opsora_v2.reset_globals()
+
+        assert opsora_v2._nvidia_client is None
+        assert opsora_v2._alibaba_client is None
+        assert opsora_v2._provider_health_cache == {}
+        assert opsora_v2._current_todos == []
+        assert opsora_v2._project_context == ""
+        assert opsora_v2._mcp_client is None
+        # singletons are recreated, not left as None
+        assert opsora_v2._cost_tracker is not None
+        assert opsora_v2._plugin_manager is not None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

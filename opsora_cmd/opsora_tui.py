@@ -181,16 +181,86 @@ def toggle_verbose() -> bool:
 # ============================================================================
 # CREDENTIAL REDACTION
 # ============================================================================
+#
+# redact_display() masks secrets before any text reaches the terminal.
+# All patterns are compiled once at import time; each rule keeps a short
+# recognizable prefix (e.g. "nvapi-****") so output stays debuggable.
 
-_REDACT_PATTERNS = [
-    re.compile(r'(api[_-]?key|secret[_-]?key|password|token|access[_-]?key|auth)\s*[=:]\s*["\']?([A-Za-z0-9_\-/.+]{8,})["\']?', re.I),
-    re.compile(r'(sk-[A-Za-z0-9]{20,})'),
-    re.compile(r'(nvapi-[A-Za-z0-9\-]{20,})'),
-    re.compile(r'(rnd_[A-Za-z0-9]{20,})'),
-    re.compile(r'(ghp_[A-Za-z0-9]{36})'),
+_MASK = "****"
+
+
+def _mask_keep_prefix(m: "re.Match[str]") -> str:
+    """Replacement: keep group(1) (provider prefix), mask the secret body."""
+    return m.group(1) + _MASK
+
+
+def _mask_keep_four(m: "re.Match[str]") -> str:
+    """Replacement: keep group(1) (name + separator) and first 4 value chars."""
+    return m.group(1) + m.group(2)[:4] + _MASK
+
+
+# Variable/field names that indicate the following value is sensitive.
+_SECRET_NAMES = (
+    r"api[_-]?key|apikey|access[_-]?key[_-]?(?:id|secret)?"
+    r"|secret[_-]?key|client[_-]?secret|private[_-]?key|signing[_-]?key"
+    r"|access[_-]?token|auth[_-]?token|bearer[_-]?token|refresh[_-]?token"
+    r"|bot[_-]?token|app[_-]?token|session[_-]?token|security[_-]?token"
+    r"|password|passwd|passphrase|credential|credentials|authorization"
+    r"|token|secret"
+)
+
+# Ordered rules: provider-specific shapes first so the generic key=value
+# fallback never partially matches an already-masked token.
+_REDACT_RULES = [
+    # NVIDIA NIM: nvapi-<long body>
+    (re.compile(r"(nvapi-)[A-Za-z0-9_\-]{16,}"), _mask_keep_prefix),
+    # OpenAI-style sk-... incl. sk-ws-, sk-proj-, sk-ant-, sk-svc-, sk-test-
+    (re.compile(r"(sk-(?:[A-Za-z]{2,8}-)?)[A-Za-z0-9_\-]{16,}"), _mask_keep_prefix),
+    # xAI Grok: xai-...
+    (re.compile(r"(xai-)[A-Za-z0-9_\-]{16,}"), _mask_keep_prefix),
+    # Render: rnd_...
+    (re.compile(r"(rnd_)[A-Za-z0-9]{16,}"), _mask_keep_prefix),
+    # GitHub fine-grained PATs and classic tokens (ghp_/gho_/ghu_/ghs_/ghr_)
+    (re.compile(r"(github_pat_)[A-Za-z0-9_]{16,}"), _mask_keep_prefix),
+    (re.compile(r"(gh[pousr]_)[A-Za-z0-9]{20,}"), _mask_keep_prefix),
+    # Slack: xoxb-/xoxp-/xoxa-/xoxr-/xoxs-
+    (re.compile(r"(xox[baprs]-)[A-Za-z0-9\-]{10,}"), _mask_keep_prefix),
+    # Google API keys: AIza...
+    (re.compile(r"(AIza)[0-9A-Za-z_\-]{20,}"), _mask_keep_prefix),
+    # Alibaba Cloud access key ids: LTAI...
+    (re.compile(r"(LTAI)[0-9A-Za-z]{12,}"), _mask_keep_prefix),
+    # Telegram bot tokens: <bot id>:<secret>
+    (re.compile(r"(\d{6,12}:)[A-Za-z0-9_\-]{25,}"), _mask_keep_prefix),
+    # Bearer tokens (Authorization headers, error messages)
+    (re.compile(r"(Bearer\s+)[A-Za-z0-9_\-./+]{16,}={0,2}", re.I), _mask_keep_prefix),
+    # Generic fallback: long token-ish value assigned to a secret-looking
+    # name (KEY=value, "key": "value", key: value, ...). Keeps first 4
+    # chars of the value for debuggability.
+    (
+        re.compile(
+            r'(["\']?(?:' + _SECRET_NAMES + r')["\']?\s*[=:]\s*["\']?)'
+            r'([A-Za-z0-9_\-/.+]{16,})',
+            re.I,
+        ),
+        _mask_keep_four,
+    ),
 ]
 
+# Backwards-compatible alias (the original module exposed this name).
+_REDACT_PATTERNS = [p for p, _ in _REDACT_RULES]
+
+
 def redact_display(text: str) -> str:
+    """Mask credentials in *text* before it is shown in the terminal.
+
+    Keeps a short prefix of each secret for debuggability (``nvapi-****``)
+    and leaves ordinary text and Rich markup untouched. Cheap enough to
+    run on every displayed string (compiled regexes, single pass per rule).
+    """
+    if not text:
+        return text
+    for pattern, repl in _REDACT_RULES:
+        text = pattern.sub(repl, text)
     return text
 
 # ============================================================================
@@ -237,7 +307,7 @@ def needs_approval(action_type: str) -> bool:
 def prompt_approval(action: str, detail: str = "") -> bool:
     console.print(Text(f"  ⚠ {action}", style=f"bold {_c('warning')}"))
     if detail:
-        console.print(Text(f"    {detail[:200]}", style="dim"))
+        console.print(Text(f"    {redact_display(detail)[:200]}", style="dim"))
     try:
         answer = console.input(Text("  lanjut? [Y/n] ", style=f"bold {_c('warning')}")).strip().lower()
         return answer in ("", "y", "yes")
@@ -415,12 +485,15 @@ def render_tool_call(name: str, args: dict[str, Any], output: str, elapsed: floa
     """Rich tool call visualization with bordered output for errors"""
     icon = _TOOL_ICONS.get(name, "⚙")
     has_output = bool(output and output.strip())
+    if has_output:
+        output = redact_display(output)
     is_error = has_output and _is_error_output(output)
 
-    # Format args
+    # Format args (redact BEFORE truncating so a truncated secret cannot
+    # leak its leading characters)
     args_parts = []
     for k, v in args.items():
-        sv = str(v)
+        sv = redact_display(str(v))
         if len(sv) > 30:
             sv = sv[:27] + "…"
         args_parts.append(sv)
@@ -462,7 +535,9 @@ def render_tool_call(name: str, args: dict[str, Any], output: str, elapsed: floa
                 try:
                     ext = os.path.splitext(filepath)[1]
                     lang = _detect_language(filepath)
-                    content = open(filepath, 'r', encoding='utf-8', errors='replace').read()[:5000]
+                    with open(filepath, 'r', encoding='utf-8', errors='replace') as fh:
+                        content = fh.read(8192)
+                    content = redact_display(content)[:5000]
                     console.print(Syntax(content, lang, theme="monokai", word_wrap=True, line_numbers=True))
                 except:
                     pass
@@ -475,7 +550,7 @@ def _render_todo(todos: list[dict]) -> None:
     for t in todos:
         status = t.get("status", "pending")
         tid = t.get("id", "?")
-        content = t.get("content", "")
+        content = redact_display(str(t.get("content", "")))
         icons = {"pending": "○", "in_progress": "●", "completed": "✓"}
         styles = {"pending": "dim", "in_progress": f"bold {_c('accent')}", "completed": f"dim {_c('success')}"}
         console.print(Text(f"  {icons.get(status, '○')} [{tid}] {content}", style=styles.get(status, "dim")))
@@ -483,7 +558,7 @@ def _render_todo(todos: list[dict]) -> None:
 
 
 def _format_args(args: dict, max_len: int = 60) -> str:
-    parts = [str(v)[:30] + "…" if len(str(v)) > 30 else str(v) for v in args.values()]
+    parts = [redact_display(str(v))[:30] + "…" if len(str(v)) > 30 else redact_display(str(v)) for v in args.values()]
     result = ", ".join(parts)
     return result[:max_len - 1] + "…" if len(result) > max_len else result
 
@@ -545,8 +620,8 @@ def render_file_edit(filepath: str, old_str: str, new_str: str) -> None:
     """Show compact diff — syntax highlighted inline."""
     import difflib
     diff = list(difflib.unified_diff(
-        old_str.splitlines(keepends=True),
-        new_str.splitlines(keepends=True),
+        redact_display(old_str).splitlines(keepends=True),
+        redact_display(new_str).splitlines(keepends=True),
         fromfile="old", tofile="new", lineterm="", n=2,
     ))
     if not diff:

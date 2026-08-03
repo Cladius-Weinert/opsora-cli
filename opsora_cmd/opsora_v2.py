@@ -1705,8 +1705,162 @@ def run_agent_turn(history: list[dict], selection: Selection, status_bar: Status
     return history, selection
 
 
+def get_provider_stream_config(provider: str, model: str) -> Optional[dict]:
+    """Return ``{api_key, base_url, model, timeout}`` for SSE streaming, or None.
+
+    Mirrors the provider getters so the streaming path talks to the same
+    endpoint/key as the normal (non-streaming) client.
+    """
+    if provider == "nvidia":
+        key = os.environ.get("NVIDIA_API_KEY")
+        if key:
+            return {"api_key": key, "base_url": "https://integrate.api.nvidia.com/v1",
+                    "model": model, "timeout": 120}
+    elif provider == "alibaba":
+        key = os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        if key:
+            url = os.environ.get("ALIBABA_BASE_URL",
+                                 "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
+            return {"api_key": key, "base_url": url, "model": model, "timeout": 120}
+    elif provider == "model_studio":
+        key = os.environ.get("DASHSCOPE_API_KEY")
+        if key:
+            return {"api_key": key,
+                    "base_url": "https://ws-u05t2ivr4fghrt6v.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+                    "model": model, "timeout": 120}
+    elif provider == "openai":
+        key = os.environ.get("OPENAI_API_KEY")
+        if key:
+            return {"api_key": key, "base_url": "https://api.openai.com/v1",
+                    "model": model, "timeout": 120}
+    elif provider == "tokenhub":
+        key = os.environ.get("TOKENHUB_API_KEY", "")
+        if key:
+            return {"api_key": key, "base_url": "https://tokenhub.tencentmaas.com/v1",
+                    "model": model, "timeout": 120}
+    elif provider == "opsora_api":
+        url = os.environ.get("OPSORA_API_URL", "")
+        token = os.environ.get("OPSORA_API_TOKEN", "")
+        if url and token:
+            return {"api_key": token, "base_url": f"{url}/v1", "model": model, "timeout": 120}
+    return None
+
+
+class _StreamMsg:
+    """Mimics an OpenAI chat-completion message built from a consumed stream."""
+
+    def __init__(self, content: str, tool_calls):
+        self.content = content
+        self.tool_calls = tool_calls
+        self.role = "assistant"
+
+    def model_dump(self, exclude_none: bool = True) -> dict:
+        d: dict = {"role": "assistant", "content": self.content}
+        if self.tool_calls:
+            d["tool_calls"] = self.tool_calls
+        return d
+
+
+class _StreamChoice:
+    def __init__(self, message):
+        self.message = message
+
+
+class _StreamResponse:
+    def __init__(self, content: str, tool_calls):
+        self.choices = [_StreamChoice(_StreamMsg(content, tool_calls))]
+        self.usage = None
+
+
+def _consume_stream(chunks, think_cb=None) -> tuple[str, list, str]:
+    """Iterate SSE chunks, streaming thinking tokens via ``think_cb``.
+
+    Returns ``(content, tool_calls, thinking)``. Raises on an error chunk so
+    the caller can fall back to the non-streaming path.
+    """
+    from opsora_streaming import accumulate_tool_call
+
+    content = ""
+    thinking = ""
+    tool_deltas: list = []
+    last_think = 0.0
+
+    for chunk in chunks:
+        if isinstance(chunk, dict) and "error" in chunk:
+            raise RuntimeError(str(chunk["error"]))
+        if chunk.get("done"):
+            break
+        choices = chunk.get("choices", [])
+        if not choices:
+            continue
+        delta = choices[0].get("delta", {}) or {}
+
+        th = delta.get("reasoning_content") or delta.get("thinking", "")
+        if th:
+            thinking += th
+            if think_cb is not None:
+                now = time.time()
+                if now - last_think > 0.1:  # throttle UI updates (~10/s)
+                    last_think = now
+                    try:
+                        think_cb(thinking)
+                    except Exception:
+                        pass
+
+        c = delta.get("content", "")
+        if c:
+            content += c
+
+        tc = delta.get("tool_calls") or []
+        if tc:
+            tool_deltas.extend(tc)
+
+    # Final thinking flush so the last tokens are shown.
+    if thinking and think_cb is not None:
+        try:
+            think_cb(thinking)
+        except Exception:
+            pass
+
+    tool_calls = accumulate_tool_call(tool_deltas) if tool_deltas else []
+    return content, tool_calls, thinking
+
+
+def call_streaming(messages: list[dict], selection: Selection, use_tools: bool = True,
+                   think_cb=None) -> tuple[Any, Selection]:
+    """Stream a completion from the selected provider (thinking tokens included).
+
+    Returns an OpenAI-shaped ``(response, selection)`` like
+    :func:`call_with_fallback`, so the caller's existing extraction logic works
+    unchanged. Raises when streaming is unavailable or fails — the caller then
+    falls back to the robust non-streaming path.
+    """
+    from opsora_streaming import stream_chat_completion
+
+    config = get_provider_stream_config(selection.provider, selection.model)
+    if config is None:
+        raise RuntimeError(f"No streaming config for provider '{selection.provider}'")
+
+    kwargs: dict[str, Any] = {}
+    all_tools = list(SAFE_TOOLS)
+    if _mcp_client:
+        all_tools.extend(_mcp_client.to_openai_tools())
+    if use_tools and all_tools:
+        kwargs["tools"] = all_tools
+        kwargs["tool_choice"] = "auto"
+
+    chunks = stream_chat_completion(config, messages, **kwargs)
+    content, tool_calls, _thinking = _consume_stream(chunks, think_cb)
+
+    if not content and not tool_calls:
+        raise RuntimeError("Streaming returned no content")
+
+    response = _StreamResponse(content, tool_calls or None)
+    return response, selection
+
+
 def run_turn_tui(history: list[dict], selection: Selection, status_bar: StatusBar,
-                 emit, status) -> tuple[list[dict], Selection]:
+                 emit, status, think=None) -> tuple[list[dict], Selection]:
     """Agent turn for the Textual TUI.
 
     Mirrors :func:`run_agent_turn` but renders through two callbacks instead of
@@ -1742,20 +1896,31 @@ def run_turn_tui(history: list[dict], selection: Selection, status_bar: StatusBa
         status_bar.model = selection.model
 
         try:
-            _max_retries = 3
-            _retry_delay = 2.0
-            for _retry in range(_max_retries):
-                try:
-                    status("Berpikir")
-                    response, selection = call_with_fallback(messages, selection, use_tools=True)
-                    break
-                except (URLError, ConnectionError, TimeoutError, OSError) as e:
-                    if _retry < _max_retries - 1:
-                        emit(Text(f"↻ Retry {_retry + 1}/{_max_retries} ({_retry_delay:.0f}s): {str(e)[:50]}", style="dim"))
-                        time.sleep(_retry_delay)
-                        _retry_delay *= 2
-                    else:
-                        raise
+            # Prefer streaming so reasoning/thinking tokens surface live (Qwen
+            # Code style). On any failure, drop back to the robust non-streaming
+            # path with retries + provider fallback.
+            response = None
+            try:
+                status("Berpikir")
+                response, selection = call_streaming(
+                    messages, selection, use_tools=True, think_cb=think)
+            except Exception:
+                if think is not None:
+                    status("Berpikir")  # reset indicator to spinner mode
+                _max_retries = 3
+                _retry_delay = 2.0
+                for _retry in range(_max_retries):
+                    try:
+                        status("Berpikir")
+                        response, selection = call_with_fallback(messages, selection, use_tools=True)
+                        break
+                    except (URLError, ConnectionError, TimeoutError, OSError) as e:
+                        if _retry < _max_retries - 1:
+                            emit(Text(f"↻ Retry {_retry + 1}/{_max_retries} ({_retry_delay:.0f}s): {str(e)[:50]}", style="dim"))
+                            time.sleep(_retry_delay)
+                            _retry_delay *= 2
+                        else:
+                            raise
 
             msg = response.choices[0].message if hasattr(response, "choices") else response
             msg_dict = msg.model_dump(exclude_none=True) if hasattr(msg, "model_dump") else {"role": "assistant", "content": getattr(msg, "content", "")}
@@ -2742,6 +2907,7 @@ def _run_textual_tui(selection: Selection, status_bar: StatusBar,
         provider=selection.provider,
         model=selection.model,
         approval=getattr(approval_mode, "value", str(approval_mode)),
+        session_id=session_id,
         on_turn_done=_on_turn_done,
     )
     app = OpsoraApp(backend)

@@ -39,7 +39,7 @@ class _FakeStatusBar:
 def _make_backend(run_turn=None, history=None):
     calls = {"run_turn": 0}
 
-    def fake_run_turn(history, selection, status_bar, emit, status):
+    def fake_run_turn(history, selection, status_bar, emit, status, think=None):
         calls["run_turn"] += 1
         status("Berpikir…")
         emit(Text("Halo dari Opsora."))
@@ -128,7 +128,7 @@ class TestPinnedInput:
         import threading
         gate = threading.Event()
 
-        def slow_turn(history, selection, status_bar, emit, status):
+        def slow_turn(history, selection, status_bar, emit, status, think=None):
             gate.wait(timeout=5)
             return history, selection
 
@@ -194,7 +194,7 @@ class TestThinkingIndicator:
         gate = threading.Event()
         seen = {"visible_mid_run": False}
 
-        def slow_turn(history, selection, status_bar, emit, status):
+        def slow_turn(history, selection, status_bar, emit, status, think=None):
             status("Berpikir")
             gate.wait(timeout=5)
             return history, selection
@@ -227,6 +227,84 @@ class TestThinkingIndicator:
         ti._frame = 1
         assert ti.SPINNER_FRAMES[1] != f0
         assert len(ti.SPINNER_FRAMES) >= 8
+
+    def test_stream_thinking_sets_text(self):
+        ti = ThinkingIndicator()
+        ti.stream_thinking("mari saya pikirkan dulu langkah ini")
+        assert ti._thinking_text == "mari saya pikirkan dulu langkah ini"
+        # render should not raise and should include the thinking content
+        ti._render_frame()
+        assert ti._thinking_text is not None
+        # start() resets back to spinner mode
+        ti.start("Berpikir")
+        assert ti._thinking_text is None
+
+
+# ---------------------------------------------------------------------------
+# Backend streaming helpers (no network — fake SSE chunks)
+# ---------------------------------------------------------------------------
+
+class TestStreamingBackend:
+    def _chunks(self):
+        # Simulated SSE chunks: thinking first, then content, then a tool call.
+        return iter([
+            {"choices": [{"delta": {"reasoning_content": "mari "}}]},
+            {"choices": [{"delta": {"reasoning_content": "cek file"}}]},
+            {"choices": [{"delta": {"content": "Halo "}}]},
+            {"choices": [{"delta": {"content": "dunia"}}]},
+            {"choices": [{"delta": {"tool_calls": [
+                {"index": 0, "id": "c1", "function": {"name": "read_", "arguments": '{"file_'}}]}}]},
+            {"choices": [{"delta": {"tool_calls": [
+                {"index": 0, "function": {"name": "", "arguments": 'path":"a.py"}'}}]}}]},
+            {"done": True},
+        ])
+
+    def test_consume_stream_extracts_thinking_content_tools(self):
+        import opsora_v2
+        seen_thinking = []
+        content, tool_calls, thinking = opsora_v2._consume_stream(
+            self._chunks(), think_cb=lambda t: seen_thinking.append(t))
+        assert thinking == "mari cek file"
+        assert content == "Halo dunia"
+        assert len(tool_calls) == 1
+        assert tool_calls[0]["function"]["name"] == "read_"
+        assert tool_calls[0]["function"]["arguments"] == '{"file_path":"a.py"}'
+        assert tool_calls[0]["id"] == "c1"
+        assert seen_thinking  # think_cb was invoked
+
+    def test_consume_stream_error_raises(self):
+        import opsora_v2
+        with pytest.raises(RuntimeError):
+            opsora_v2._consume_stream(iter([{"error": "HTTP 500: x"}]))
+
+    def test_stream_response_shape(self):
+        import opsora_v2
+        resp = opsora_v2._StreamResponse("hi", None)
+        msg = resp.choices[0].message
+        assert msg.content == "hi"
+        assert msg.model_dump() == {"role": "assistant", "content": "hi"}
+
+    def test_stream_msg_includes_tool_calls(self):
+        import opsora_v2
+        tcs = [{"id": "c1", "type": "function",
+                "function": {"name": "x", "arguments": "{}"}}]
+        msg = opsora_v2._StreamMsg("c", tcs)
+        d = msg.model_dump()
+        assert d["tool_calls"] == tcs
+
+    def test_get_provider_stream_config_nvidia(self, monkeypatch):
+        import opsora_v2
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+        cfg = opsora_v2.get_provider_stream_config("nvidia", "some/model")
+        assert cfg is not None
+        assert cfg["api_key"] == "nvapi-test"
+        assert "nvidia" in cfg["base_url"]
+        assert cfg["model"] == "some/model"
+
+    def test_get_provider_stream_config_unknown(self, monkeypatch):
+        import opsora_v2
+        assert opsora_v2.get_provider_stream_config("bedrock", "m") is None
+        assert opsora_v2.get_provider_stream_config("nope", "m") is None
 
 
 # ---------------------------------------------------------------------------

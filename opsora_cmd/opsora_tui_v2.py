@@ -19,7 +19,6 @@ from typing import Any, Callable, List, Optional
 
 from rich.console import Group, RenderableType
 from rich.markdown import Markdown
-from rich.panel import Panel
 from rich.text import Text
 
 from textual import work
@@ -54,6 +53,7 @@ class TuiBackend:
     provider: str = ""
     model: str = ""
     approval: str = "full-auto"
+    session_id: str = ""
     on_turn_done: Optional[Callable[[list, Any], None]] = None
 
 
@@ -79,19 +79,37 @@ class ThinkingIndicator(Static):
         self._dim = dim
         self._frame = 0
         self._message = "Berpikir"
+        self._thinking_text: Optional[str] = None
         self._timer = None
 
     def start(self, message: str = "Berpikir") -> None:
         self._message = message
+        self._thinking_text = None  # back to spinner mode
         self._frame = 0
         self._render_frame()
-        if self._timer is None:
-            self._timer = self.set_interval(0.09, self._advance)
+        self._ensure_timer()
         self.display = True
 
     def set_message(self, message: str) -> None:
         self._message = message
+        self._thinking_text = None
         self._render_frame()
+
+    def stream_thinking(self, text: str) -> None:
+        """Show streaming reasoning/thinking content (Qwen Code style)."""
+        self._thinking_text = text
+        self._ensure_timer()
+        self.display = True
+        self._render_frame()
+
+    def _ensure_timer(self) -> None:
+        # set_interval needs a mounted widget / running loop; guard so calls on
+        # a not-yet-mounted widget (e.g. unit tests) don't raise.
+        if self._timer is None:
+            try:
+                self._timer = self.set_interval(0.09, self._advance)
+            except Exception:
+                self._timer = None
 
     def stop(self) -> None:
         if self._timer is not None:
@@ -100,6 +118,7 @@ class ThinkingIndicator(Static):
             except Exception:
                 pass
             self._timer = None
+        self._thinking_text = None
         self.display = False
 
     def on_unmount(self) -> None:
@@ -112,10 +131,23 @@ class ThinkingIndicator(Static):
     def _render_frame(self) -> None:
         frame = self.SPINNER_FRAMES[self._frame]
         t = Text()
-        t.append(f" {frame} ", style=f"bold {self._accent}")
-        t.append(self._message, style=f"{self._accent}")
-        t.append(" …", style=f"{self._dim}")
-        self.update(t)
+        if self._thinking_text:
+            # Streaming thinking: spinner + label + last lines + cursor.
+            t.append(f" {frame} ", style=f"bold {self._accent}")
+            t.append("thinking", style=f"italic {self._dim}")
+            lines = [ln for ln in self._thinking_text.strip().split("\n")]
+            shown = "\n".join(lines[-5:])
+            t.append("\n " + shown, style=f"italic {self._dim}")
+            t.append(" ▌", style=f"{self._accent}")
+        else:
+            t.append(f" {frame} ", style=f"bold {self._accent}")
+            t.append(self._message, style=f"{self._accent}")
+            t.append(" …", style=f"{self._dim}")
+        try:
+            self.update(t)
+        except Exception:
+            # Not mounted yet (e.g. unit test) — content set lazily on mount.
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +174,8 @@ class OpsoraApp(App):
         padding: 0 1;
     }
     #thinking {
-        height: 1;
+        height: auto;
+        max-height: 8;
         margin: 0 1;
         padding: 0 1;
     }
@@ -367,31 +400,80 @@ class OpsoraApp(App):
     def _handle_slash(self, text: str) -> None:
         parts = text.split()
         cmd = parts[0].lower()
-        log = self.query_one("#log", RichLog)
 
+        # Local-only commands that must act on the TUI itself.
         if cmd in ("/exit", "/quit", "/q"):
             self.exit()
             return
         if cmd in ("/clear", "/reset"):
-            log.clear()
+            self.query_one("#log", RichLog).clear()
             self.backend.history.clear()
             self._append(Text("✓ Layar & riwayat dibersihkan", style="green"))
             return
-        if cmd == "/status":
-            self._append(self._welcome_renderable())
+
+        if self._busy:
+            self._append(Text("⏳ Masih memproses, tunggu sebentar…", style="yellow"))
             return
-        if cmd == "/help":
-            self._append(Panel(
-                "[bold]/exit[/bold]  keluar        [bold]/clear[/bold]  bersihkan layar\n"
-                "[bold]/status[/bold]  detail        [bold]/help[/bold]  bantuan ini\n\n"
-                "[dim]Pintasan:  Ctrl+L bersihkan · Ctrl+C batalkan · Ctrl+D keluar\n"
-                "Perintah lengkap ada di mode klasik:  OPSORA_CLASSIC=1 opsora[/dim]",
-                title="Opsora — perintah", border_style="cyan"))
-            return
-        # Unknown slash command — hint to classic mode.
-        self._append(Text(
-            f"✗ '{cmd}' belum didukung di TUI baru. Pakai mode klasik: "
-            f"OPSORA_CLASSIC=1 opsora", style="yellow"))
+
+        # Everything else is delegated to the engine's handle_command, whose
+        # console output we capture and render into the log (see worker below).
+        self._append(Text(f"❯ {text}", style="dim"))
+        self._run_slash_worker(text)
+
+    @work(thread=True, exclusive=True, group="slash")
+    def _run_slash_worker(self, text: str) -> None:
+        self._busy = True
+        self.call_from_thread(self._thinking_start, "Menjalankan perintah")
+        b = self.backend
+        try:
+            from opsora_v2 import handle_command
+            from opsora_tui import console as tui_console
+
+            with tui_console.capture() as capture:
+                cont, new_sel, resume_id = handle_command(
+                    text, b.history, b.selection, b.status_bar, b.session_id)
+            captured = capture.get()
+            if captured.strip():
+                self.call_from_thread(self._append_ansi, captured)
+
+            if new_sel is not None:
+                b.selection = new_sel
+                b.provider = getattr(new_sel, "provider", b.provider)
+                b.model = getattr(new_sel, "model", b.model)
+                try:
+                    b.status_bar.provider = new_sel.provider
+                    b.status_bar.model = new_sel.model
+                except Exception:
+                    pass
+            if resume_id:
+                self.call_from_thread(self._do_resume, resume_id)
+            if not cont:
+                self.call_from_thread(self.exit)
+        except Exception as e:  # noqa: BLE001
+            self.call_from_thread(self._append, Text(f"✗ {e}", style="bold red"))
+        finally:
+            self._busy = False
+            self.call_from_thread(self._thinking_stop)
+            self.call_from_thread(self._refresh_status)
+            self.call_from_thread(self._refocus_input)
+
+    def _append_ansi(self, ansi_text: str) -> None:
+        """Render captured console output (ANSI) into the log, colors intact."""
+        try:
+            styled = Text.from_ansi(ansi_text)
+        except Exception:
+            styled = Text(ansi_text)
+        self.query_one("#log", RichLog).write(styled)
+
+    def _do_resume(self, resume_id: str) -> None:
+        try:
+            from opsora_session import load_session
+            session = load_session(resume_id)
+            if session:
+                self.backend.history = session.messages
+                self.backend.session_id = resume_id
+        except Exception:
+            pass
 
     # -- turn execution (worker thread) --------------------------------------
 
@@ -408,9 +490,12 @@ class OpsoraApp(App):
         def status(text: str) -> None:
             self.call_from_thread(self._thinking_message, text)
 
+        def think(text: str) -> None:
+            self.call_from_thread(self._thinking_stream, text)
+
         try:
             history, selection = b.run_turn(
-                b.history, b.selection, b.status_bar, emit, status)
+                b.history, b.selection, b.status_bar, emit, status, think=think)
             b.history = history
             b.selection = selection
             b.provider = getattr(selection, "provider", b.provider)
@@ -443,6 +528,12 @@ class OpsoraApp(App):
     def _thinking_message(self, message: str) -> None:
         try:
             self.query_one("#thinking", ThinkingIndicator).set_message(message)
+        except Exception:
+            pass
+
+    def _thinking_stream(self, text: str) -> None:
+        try:
+            self.query_one("#thinking", ThinkingIndicator).stream_thinking(text)
         except Exception:
             pass
 

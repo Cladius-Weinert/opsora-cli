@@ -42,6 +42,7 @@ import logging
 import os
 import random
 import re
+import socket
 import threading
 import time
 import uuid
@@ -292,13 +293,20 @@ def _status_from_cause_chain(exc: BaseException, depth: int = 3) -> Optional[int
     return None
 
 
+def _is_transient_status(code: int) -> bool:
+    """HTTP statuses worth retrying: any 5xx, 429 (rate limit), and 408
+    (request timeout — the server timed out the request; safe to retry)."""
+    return code >= 500 or code in (429, 408)
+
+
 def is_transient_error(exc: BaseException) -> bool:
     """Return True when *exc* looks like a transient provider failure.
 
-    Transient: HTTP 5xx, 429 (rate limit), connection resets, DNS failures,
-    timeouts. Fatal (never retried, never trips the breaker): 4xx auth /
-    validation / not-found errors, programming errors, and the internal
-    "provider not available" condition.
+    Transient: HTTP 5xx, 429 (rate limit), 408 (request timeout),
+    connection resets, DNS failures, timeouts.
+    Fatal (never retried, never trips the breaker): 4xx auth / validation /
+    not-found errors, programming errors, and the internal "provider not
+    available" condition.
     """
     if exc is None:
         return False
@@ -309,11 +317,11 @@ def is_transient_error(exc: BaseException) -> bool:
         resp = getattr(exc, "response", None)
         status = getattr(resp, "status_code", None)
     if isinstance(status, int):
-        return status >= 500 or status == 429
+        return _is_transient_status(status)
 
     # urllib shapes.
     if isinstance(exc, HTTPError) and isinstance(exc.code, int):
-        return exc.code >= 500 or exc.code == 429
+        return _is_transient_status(exc.code)
     if isinstance(exc, (URLError, ConnectionError, TimeoutError)):
         return True
     # socket.timeout is an alias of TimeoutError on 3.10+; keep the name check
@@ -325,17 +333,19 @@ def is_transient_error(exc: BaseException) -> bool:
     # RuntimeError("Connection error: ...") with the original chained.
     chained = _status_from_cause_chain(exc)
     if chained is not None:
-        return chained >= 500 or chained == 429
+        return _is_transient_status(chained)
     msg = str(exc)
     m = _HTTP_CODE_IN_MSG.search(msg)
     if m:
         code = int(m.group(1))
-        return code >= 500 or code == 429
+        return _is_transient_status(code)
     if "connection error" in msg.lower() or "timed out" in msg.lower() or "timeout" in msg.lower():
         return True
 
-    # Generic OSError covers socket-level failures raised by urllib/httpx.
-    if isinstance(exc, OSError):
+    # Socket-level failures raised by urllib/httpx are transient; other
+    # OSError subclasses (FileNotFoundError, PermissionError, ...) are
+    # local file bugs and must not be retried or trip provider breakers.
+    if isinstance(exc, (URLError, ConnectionError, TimeoutError, socket.gaierror)):
         return True
 
     return False

@@ -334,6 +334,14 @@ CODING_MODELS = [
     ("alibaba", "qwen3-coder-flash"),                     # Code specialist (1.3s) ⚠️ key invalid
     ("alibaba", "qwen-plus"),                             # Good coding (1.4s) ⚠️ key invalid
 ]
+# Vision-capable models only — image/screenshot prompts must never route to
+# text-only models (they cannot accept image input at all).
+VISION_MODELS = [
+    ("nvidia", "meta/llama-3.2-90b-vision-instruct"),     # 90B vision (1.5s)
+    ("nvidia", "meta/llama-3.2-11b-vision-instruct"),     # 11B vision
+    ("nvidia", "microsoft/phi-3-vision-128k-instruct"),   # Phi-3 Vision 128K
+    ("nvidia", "nvidia/neva-22b"),                        # NEVA 22B multimodal
+]
 
 # ============================================================================
 # Model Selection & Routing
@@ -349,27 +357,40 @@ class Selection:
 _provider_health_cache = {}
 
 def is_provider_available(provider: str) -> bool:
-    # Check if client can be initialized (has API key)
-    key_map = {
-        "nvidia": "NVIDIA_API_KEY",
-        "alibaba": "DASHSCOPE_API_KEY",
-        "model_studio": "DASHSCOPE_API_KEY",
-        "openai": "OPENAI_API_KEY",
-        "bedrock": "AWS_PROFILE",
-        "tokenhub": "TOKENHUB_API_KEY",
-        "opsora_api": "OPSORA_API_TOKEN",
-    }
-    key = key_map.get(provider)
-    if key is None:
-        return False
-    if key == "AWS_PROFILE":
+    """True when the provider's credentials are configured.
+
+    Mirrors each client getter's env requirements exactly (e.g. alibaba
+    accepts DASHSCOPE_API_KEY *or* OPENAI_API_KEY; opsora_api needs BOTH
+    URL and token). Only nvidia/alibaba additionally run a cached live
+    health probe — the other providers have no probe endpoint, so for them
+    configuration alone decides (they used to fall through to False).
+    """
+    if provider == "bedrock":
         return bedrock_available()
-    if not os.environ.get(key):
+    if provider == "nvidia":
+        configured = bool(os.environ.get("NVIDIA_API_KEY"))
+    elif provider == "alibaba":
+        configured = bool(os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("OPENAI_API_KEY"))
+    elif provider == "model_studio":
+        configured = bool(os.environ.get("DASHSCOPE_API_KEY"))
+    elif provider == "openai":
+        configured = bool(os.environ.get("OPENAI_API_KEY"))
+    elif provider == "tokenhub":
+        configured = bool(os.environ.get("TOKENHUB_API_KEY"))
+    elif provider == "opsora_api":
+        configured = bool(os.environ.get("OPSORA_API_URL") and os.environ.get("OPSORA_API_TOKEN"))
+    else:
         return False
+    if not configured:
+        return False
+
+    # No live probe for these providers — env configuration is the check.
+    if provider not in ("nvidia", "alibaba"):
+        return True
 
     # Cache health check for 60 seconds to avoid repeated API calls
     import time
-    cache_key = f"{provider}_{key}"
+    cache_key = f"{provider}_{provider}"
     now = time.time()
     if cache_key in _provider_health_cache:
         cached_health, cached_time = _provider_health_cache[cache_key]
@@ -377,7 +398,9 @@ def is_provider_available(provider: str) -> bool:
             return cached_health
 
     # Quick health check for known providers
-    healthy = _check_provider_health(provider, os.environ[key])
+    probe_key = os.environ.get("NVIDIA_API_KEY") if provider == "nvidia" else (
+        os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("OPENAI_API_KEY"))
+    healthy = _check_provider_health(provider, probe_key)
     _provider_health_cache[cache_key] = (healthy, now)
     return healthy
 
@@ -420,6 +443,7 @@ def auto_select_model(prompt: str) -> Selection:
         "quick": FAST_MODELS,
         "cloud": POWER_MODELS,
         "creative": POWER_MODELS,
+        "vision": VISION_MODELS,
         "general": POWER_MODELS,
     }
     tier = tier_map.get(intent, POWER_MODELS)
@@ -429,8 +453,10 @@ def auto_select_model(prompt: str) -> Selection:
         if is_provider_available(provider):
             return Selection(provider, model)
 
-    # Fallback: any available model
-    for provider, model in POWER_MODELS + FAST_MODELS:
+    # Fallback: any available model (vision intent retries the vision tier
+    # first so an image prompt doesn't land on a text-only model).
+    fallback = (VISION_MODELS + POWER_MODELS + FAST_MODELS) if intent == "vision" else (POWER_MODELS + FAST_MODELS)
+    for provider, model in fallback:
         if is_provider_available(provider):
             return Selection(provider, model)
 
@@ -559,6 +585,13 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
             old_str, new_str = args["old_string"], args["new_string"]
             if old_str not in content:
                 return f"ERROR: old_string not found in {fp}."
+            # Ambiguity guard: replace(..., 1) would silently edit the FIRST
+            # occurrence, which is the wrong spot when old_str occurs several
+            # times. Require exactly one match.
+            occurrences = content.count(old_str)
+            if occurrences != 1:
+                return (f"ERROR: old_string matches {occurrences} locations in {fp} — "
+                        f"include more surrounding context to make it unique.")
             if needs_approval("edit_file"):
                 if not prompt_approval(f"Edit {fp}", f"- {old_str[:100]}\n+ {new_str[:100]}"):
                     return "Edit cancelled."
@@ -570,19 +603,23 @@ def execute_tool(name: str, args: dict[str, Any]) -> str:
         if name == "run_command":
             cmd = str(args["command"])
 
-            # Safety guard: check dangerous commands via NVIDIA AI (always active)
-            _dangerous_patterns = ["rm -rf /", "mkfs", "dd if=", "> /dev/sd",
-                                   ":(){:|:&};:", "chmod -R 777 /", "curl|bash",
-                                   "wget|sh", "format c:", "del /f /s"]
-            if any(p in cmd.lower() for p in _dangerous_patterns):
+            # Safety guard: token-boundary detection (no substring false
+            # positives — "rm -rf /tmp/x" is NOT "rm -rf /"), then an AI
+            # safety verdict. When the verdict is unavailable, fail CLOSED
+            # in approval modes (only FULL_AUTO accepted the risk upfront).
+            if _is_dangerous_command(cmd):
                 try:
                     from opsora_nvidia import check_command_safety
                     safety = check_command_safety(cmd)
-                    if not safety.get("safe", True):
-                        console.print(Text(f"  ⚠ BLOCKED: {safety.get('reason', 'Unsafe command')}", style="bold red"))
-                        return f"BLOCKED by safety guard: {safety.get('reason', 'Unsafe command')}"
                 except Exception:
-                    pass  # If safety check fails, fall through to normal approval
+                    safety = None
+                if safety is None:
+                    if get_approval_mode() != ApprovalMode.FULL_AUTO:
+                        console.print(Text("  ⚠ BLOCKED: safety check unavailable for a potentially dangerous command.", style="bold red"))
+                        return "BLOCKED: safety check unavailable and command matches a dangerous pattern."
+                elif not safety.get("safe", True):
+                    console.print(Text(f"  ⚠ BLOCKED: {safety.get('reason', 'Unsafe command')}", style="bold red"))
+                    return f"BLOCKED by safety guard: {safety.get('reason', 'Unsafe command')}"
 
             if needs_approval("run_command"):
                 if not prompt_approval(f"Run command", cmd):
@@ -1180,18 +1217,26 @@ def invoke_provider(provider: str, model: str, messages: list[dict], use_tools: 
 def call_with_fallback(messages: list[dict], selection: Selection, use_tools: bool = True) -> tuple[Any, Selection]:
     errors = []
     candidates = [selection]
-    
-    # Add alternative models from the same tier based on intent
+
+    # Add alternative models from the same tier based on intent.
+    # Classify from the last *user* message — mid-loop, messages[-1] is
+    # usually a tool result and would misroute the fallback tier.
     from opsora_routing import IntentRouter
     router = IntentRouter()
-    intent = router.classify(messages[-1].get("content", "") if messages else "")
-    
+    last_user_content = ""
+    for _m in reversed(messages):
+        if _m.get("role") == "user":
+            last_user_content = str(_m.get("content", "") or "")
+            break
+    intent = router.classify(last_user_content)
+
     tier_map = {
         "code": CODING_MODELS,
         "analysis": REASONING_MODELS,
         "quick": FAST_MODELS,
         "cloud": POWER_MODELS,
         "creative": POWER_MODELS,
+        "vision": VISION_MODELS,
         "general": POWER_MODELS,
     }
     tier = tier_map.get(intent, POWER_MODELS)
@@ -1213,6 +1258,7 @@ def call_with_fallback(messages: list[dict], selection: Selection, use_tools: bo
                 candidates.append(Selection(prov, models[0]))
 
     slog = get_structured_logger()
+    last_exc: Optional[BaseException] = None
     for c in candidates:
         try:
             result = invoke_provider(c.provider, c.model, messages, use_tools)
@@ -1226,8 +1272,15 @@ def call_with_fallback(messages: list[dict], selection: Selection, use_tools: bo
                 )
             return result, c
         except Exception as e:
+            last_exc = e
             errors.append(f"{c.provider}:{c.model} → {str(e)[:120]}")
     slog.error("all_providers_failed", errors=errors[:3])
+    # When the last failure was transient (5xx/429/connection/timeout),
+    # re-raise the typed error instead of a plain RuntimeError — the callers'
+    # retry loops catch (URLError, ConnectionError, TimeoutError, OSError)
+    # and would never fire on RuntimeError("All providers failed").
+    if last_exc is not None and is_transient_error(last_exc):
+        raise last_exc
     raise RuntimeError(f"All providers failed: {'; '.join(errors[:3])}")
 
 
@@ -1269,7 +1322,19 @@ def compress_context(messages: list[dict], selection: Selection) -> list[dict]:
 
     # Naive fallback: truncate old tool results
     system_msgs = [m for m in messages if m.get("role") == "system"]
-    recent = messages[-6:]
+    # Snap the recent-window start to a tool-call group boundary: starting
+    # mid-group would keep tool results without the assistant tool_calls
+    # message that produced them, orphaning tool_call_ids (the API rejects
+    # such histories — same poisoning class as an interrupted tool loop).
+    start = max(0, len(messages) - 6)
+    try:
+        from opsora_compression import _tool_call_groups
+        for group in _tool_call_groups(messages):
+            if group[0] < start <= group[-1]:
+                start = group[0]
+    except Exception:
+        pass  # keep the plain 6-message window if grouping is unavailable
+    recent = messages[start:]
     compressed = list(system_msgs)
     summary_parts = []
     for m in messages:
@@ -1358,6 +1423,59 @@ def _validate_command(cmd: str) -> str:
         if d in cmd_lower:
             raise ValueError(f"Dangerous command blocked: {d}")
     return cmd
+
+
+def _is_dangerous_command(cmd: str) -> bool:
+    """Token-boundary detection of potentially dangerous commands.
+
+    Substring matching produces false positives — "rm -rf /tmp/x" contains
+    "rm -rf /" — so patterns are matched on shlex tokens and word-boundary
+    regexes instead. This is only the gate that decides whether the AI
+    safety check (check_command_safety) is consulted; it never blocks by
+    itself.
+    """
+    lowered = cmd.lower()
+    # Fork bomb — a fixed literal, inherently safe to substring-match.
+    if ":(){:|:&};:" in lowered:
+        return True
+    # Redirect into a raw disk device ("> /dev/sda").
+    if re.search(r">\s*/dev/sd", lowered):
+        return True
+    # Piping a download straight into a shell (curl … | bash / wget … | sh).
+    if re.search(r"\bcurl\b[^|]*\|\s*(bash|sh)\b", lowered):
+        return True
+    if re.search(r"\bwget\b[^|]*\|\s*sh\b", lowered):
+        return True
+
+    try:
+        tokens = shlex.split(lowered)
+    except ValueError:
+        tokens = lowered.split()
+
+    for i, tok in enumerate(tokens):
+        name = tok.rsplit("/", 1)[-1]  # /usr/bin/rm → rm
+        rest = tokens[i + 1:]
+        if name == "rm":
+            # Recursive delete whose target is the filesystem root (or /*).
+            has_recursive = any(t.startswith("-") and "r" in t for t in rest)
+            targets = [t for t in rest if not t.startswith("-")]
+            if has_recursive and any(t in ("/", "/*") for t in targets):
+                return True
+        elif name == "chmod":
+            flags = [t for t in rest if t.startswith("-")]
+            targets = [t for t in rest if not t.startswith("-")]
+            if (any("r" in f for f in flags) and "777" in rest
+                    and any(t in ("/", "/*") for t in targets)):
+                return True
+        elif name.startswith("mkfs"):
+            return True
+        elif name == "dd" and any(t.startswith("if=") for t in rest):
+            return True
+        elif name == "format" and any(t == "c:" for t in rest):
+            return True
+        elif name == "del" and "/f" in rest and "/s" in rest:
+            return True
+    return False
 
 
 # ============================================================================
@@ -1492,10 +1610,45 @@ def generate_session_title(history: list[dict], selection: Selection) -> str:
 # Agent Loop — ReAct with Activity Trail, Auto-Recovery, Compression
 # ============================================================================
 
+def _append_interrupted_tool_results(history: list[dict]) -> None:
+    """Close outstanding tool_calls with placeholder results.
+
+    When a round aborts mid tool-loop (provider error, recovery crash, …),
+    the last assistant message can carry tool_calls with no matching tool
+    response. The chat-completions contract requires a tool message after
+    every tool_call, so such orphaned calls poison every subsequent request.
+    Append an "[interrupted]" placeholder for each unanswered call id.
+    """
+    assist_idx: Optional[int] = None
+    for i in range(len(history) - 1, -1, -1):
+        m = history[i]
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            assist_idx = i
+            break
+    if assist_idx is None:
+        return
+    expected: list[str] = []
+    for tc in history[assist_idx].get("tool_calls") or []:
+        tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
+        if tc_id:
+            expected.append(tc_id)
+    if not expected:
+        return
+    answered = {m.get("tool_call_id") for m in history[assist_idx + 1:]
+                if m.get("role") == "tool"}
+    for tc_id in expected:
+        if tc_id not in answered:
+            history.append({"role": "tool", "tool_call_id": tc_id,
+                            "content": "[interrupted]"})
+
+
 def run_agent_turn(history: list[dict], selection: Selection, status_bar: StatusBar) -> tuple[list[dict], Selection]:
     total_rounds = TOOL_MAX_ROUNDS
     total_input_chars = 0
     total_output_chars = 0
+
+    # Stale todos from a previous turn must not trigger runaway auto-continue.
+    _current_todos.clear()
 
     # Turn separator — visual break between conversation turns
     _turn_num = sum(1 for m in history if m.get("role") == "user") + 1
@@ -1567,7 +1720,17 @@ def run_agent_turn(history: list[dict], selection: Selection, status_bar: Status
                     fn = tc.function if hasattr(tc, "function") else tc.get("function", {})
                     name = fn.name if hasattr(fn, "name") else fn.get("name", "")
                     args_raw = fn.arguments if hasattr(fn, "arguments") else fn.get("arguments", "{}")
-                    args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                    tc_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
+                    try:
+                        args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                        if not isinstance(args, dict):
+                            raise ValueError(f"expected a JSON object, got {type(args).__name__}")
+                    except (TypeError, ValueError) as e:
+                        # Malformed tool-args JSON must not crash the round and
+                        # leave this tool_call orphaned — answer it with an error.
+                        history.append({"role": "tool", "tool_call_id": tc_id,
+                                        "content": f"ERROR: malformed tool arguments JSON for '{name}': {e}. Tool not executed."})
+                        continue
 
                     # Update activity based on current task with specific details
                     activity_map = {
@@ -1619,8 +1782,13 @@ def run_agent_turn(history: list[dict], selection: Selection, status_bar: Status
                     _tool_start = time.time()
                     output = execute_tool(name, args)
 
-                    # Auto-recovery for failed commands
-                    output = _try_error_recovery(name, args, output, history, selection)
+                    # Auto-recovery for failed commands. A recovery crash
+                    # (e.g. subprocess.TimeoutExpired from a pip retry) must
+                    # not kill the round — keep the original tool output.
+                    try:
+                        output = _try_error_recovery(name, args, output, history, selection)
+                    except Exception:
+                        pass
 
                     # Render tool output with elapsed time
                     _tool_elapsed = time.time() - _tool_start
@@ -1692,6 +1860,9 @@ def run_agent_turn(history: list[dict], selection: Selection, status_bar: Status
             # SECURITY (Phase 1): provider/network errors can echo URLs,
             # headers or key fragments — redact before display.
             console.print(Text(f"✗ {redact_display(str(e))}", style="red"))
+            # Close any outstanding tool_calls so history never ends with
+            # orphaned calls (that would poison the next provider request).
+            _append_interrupted_tool_results(history)
             break
 
     # Token/cost summary (v3.1: real tracking from API)
@@ -1841,7 +2012,15 @@ def call_streaming(messages: list[dict], selection: Selection, use_tools: bool =
     if config is None:
         raise RuntimeError(f"No streaming config for provider '{selection.provider}'")
 
-    kwargs: dict[str, Any] = {}
+    kwargs: dict[str, Any] = {
+        # Ask the provider for real usage stats in the final SSE chunk so
+        # streaming turns are costed from API data instead of showing 0.
+        "extra_body": {"stream_options": {"include_usage": True}},
+        # Parity with the non-streaming path (invoke_provider): same
+        # max_tokens/temperature so TUI answers aren't truncated at half.
+        "temperature": DEFAULT_TEMPERATURE,
+        "max_tokens": 8192 if selection.provider in ("alibaba", "model_studio", "tokenhub", "opsora_api") else DEFAULT_MAX_TOKENS,
+    }
     all_tools = list(SAFE_TOOLS)
     if _mcp_client:
         all_tools.extend(_mcp_client.to_openai_tools())
@@ -1850,12 +2029,38 @@ def call_streaming(messages: list[dict], selection: Selection, use_tools: bool =
         kwargs["tool_choice"] = "auto"
 
     chunks = stream_chat_completion(config, messages, **kwargs)
-    content, tool_calls, _thinking = _consume_stream(chunks, think_cb)
+
+    # Capture the usage object from the final chunk (include_usage) without
+    # changing _consume_stream's (content, tool_calls, thinking) contract.
+    stream_usage: dict = {}
+
+    def _capture_usage(chunk_iter):
+        for chunk in chunk_iter:
+            if isinstance(chunk, dict):
+                u = chunk.get("usage")
+                if isinstance(u, dict) and u:
+                    stream_usage.clear()
+                    stream_usage.update(u)
+            yield chunk
+
+    content, tool_calls, _thinking = _consume_stream(_capture_usage(chunks), think_cb)
 
     if not content and not tool_calls:
         raise RuntimeError("Streaming returned no content")
 
     response = _StreamResponse(content, tool_calls or None)
+    if stream_usage:
+        response.usage = dict(stream_usage)
+    else:
+        # Provider sent no usage — record a char-based estimate so /cost
+        # isn't 0 for streaming turns.
+        prompt_tokens = (sum(len(str(m.get("content", ""))) for m in messages) + 3) // 4
+        completion_tokens = (len(content) + 3) // 4
+        response.usage = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
     return response, selection
 
 
@@ -1879,10 +2084,15 @@ def run_turn_tui(history: list[dict], selection: Selection, status_bar: StatusBa
     total_input_chars = 0
     total_output_chars = 0
 
+    # Stale todos from a previous turn must not trigger runaway auto-continue.
+    _current_todos.clear()
+
     _turn_num = sum(1 for m in history if m.get("role") == "user")
     model_short = selection.model.split("/")[-1] if "/" in selection.model else selection.model
-    emit(Text(f"── #{_turn_num} {model_short} ", style="dim")
-         + Text("─" * max(5, 30 - len(str(_turn_num)) - len(model_short)), style="#2a2a3a"))
+    _th = get_theme(load_theme_preference())
+    emit(Text(f"── #{_turn_num} {model_short} ", style=f"{_th.get('dim', 'dim')}")
+         + Text("─" * max(5, 30 - len(str(_turn_num)) - len(model_short)),
+                style=f"{_th.get('separator', 'dim')}"))
 
     for round_idx in range(total_rounds):
         sys_prompt = SYSTEM_PROMPT
@@ -1916,7 +2126,8 @@ def run_turn_tui(history: list[dict], selection: Selection, status_bar: StatusBa
                         break
                     except (URLError, ConnectionError, TimeoutError, OSError) as e:
                         if _retry < _max_retries - 1:
-                            emit(Text(f"↻ Retry {_retry + 1}/{_max_retries} ({_retry_delay:.0f}s): {str(e)[:50]}", style="dim"))
+                            emit(Text(f"~ Retry {_retry + 1}/{_max_retries} ({_retry_delay:.0f}s): {str(e)[:50]}",
+                                      style=f"{_th.get('dim', 'dim')}"))
                             time.sleep(_retry_delay)
                             _retry_delay *= 2
                         else:
@@ -1946,7 +2157,17 @@ def run_turn_tui(history: list[dict], selection: Selection, status_bar: StatusBa
                     fn = tc.function if hasattr(tc, "function") else tc.get("function", {})
                     name = fn.name if hasattr(fn, "name") else fn.get("name", "")
                     args_raw = fn.arguments if hasattr(fn, "arguments") else fn.get("arguments", "{}")
-                    args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                    tc_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
+                    try:
+                        args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                        if not isinstance(args, dict):
+                            raise ValueError(f"expected a JSON object, got {type(args).__name__}")
+                    except (TypeError, ValueError) as e:
+                        # Malformed tool-args JSON must not crash the round and
+                        # leave this tool_call orphaned — answer it with an error.
+                        history.append({"role": "tool", "tool_call_id": tc_id,
+                                        "content": f"ERROR: malformed tool arguments JSON for '{name}': {e}. Tool not executed."})
+                        continue
 
                     status(f"Menjalankan {name}")
 
@@ -1961,10 +2182,11 @@ def run_turn_tui(history: list[dict], selection: Selection, status_bar: StatusBa
                             )
                             if not _safety.get("safe", True):
                                 risks = ", ".join(_safety.get("risks", [])[:2])
-                                emit(Text(f"⚠ Safety: {risks}", style="bold yellow"))
+                                emit(Text(f"! Safety: {risks}", style=f"bold {_th.get('warning', 'yellow')}"))
                                 if get_approval_mode() != ApprovalMode.FULL_AUTO:
                                     # No interactive approval in the TUI yet — block safely.
-                                    emit(Text("⛔ Butuh approval (mode non-auto). Pakai mode klasik untuk approve.", style="yellow"))
+                                    emit(Text("! Butuh approval (mode non-auto). Pakai mode klasik untuk approve.",
+                                              style=f"{_th.get('warning', 'yellow')}"))
                                     tc_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
                                     history.append({"role": "tool", "tool_call_id": tc_id, "content": "BLOCKED by safety check."})
                                     continue
@@ -1973,7 +2195,12 @@ def run_turn_tui(history: list[dict], selection: Selection, status_bar: StatusBa
 
                     _tool_start = time.time()
                     output = execute_tool(name, args)
-                    output = _try_error_recovery(name, args, output, history, selection)
+                    # A recovery crash (e.g. subprocess.TimeoutExpired from a
+                    # pip retry) must not kill the round — keep the output.
+                    try:
+                        output = _try_error_recovery(name, args, output, history, selection)
+                    except Exception:
+                        pass
                     _tool_elapsed = time.time() - _tool_start
                     total_output_chars += len(output)
                     _auto_diff_after_edit(name, args)
@@ -1982,15 +2209,15 @@ def run_turn_tui(history: list[dict], selection: Selection, status_bar: StatusBa
                     _args_short = ", ".join(f"{k}={str(v)[:40]}" for k, v in list(args.items())[:3])
                     _is_err = output.strip().lower().startswith(("error", "traceback")) or "error:" in output.lower()[:80]
                     _icon = "✗" if _is_err else "✓"
-                    _icon_style = "red" if _is_err else "green"
+                    _icon_style = _th.get("error", "red") if _is_err else _th.get("success", "green")
                     _head = Text(f"{_icon} {name}", style=f"bold {_icon_style}")
-                    _head.append(f" ({_args_short})" if _args_short else "", style="dim")
-                    _head.append(f"  {_tool_elapsed:.1f}s", style="dim")
+                    _head.append(f" ({_args_short})" if _args_short else "", style=f"{_th.get('dim', 'dim')}")
+                    _head.append(f"  {_tool_elapsed:.1f}s", style=f"{_th.get('dim', 'dim')}")
                     emit(_head)
                     _out_preview = output.strip()
                     if _out_preview:
                         _snippet = _out_preview[:600] + ("…" if len(_out_preview) > 600 else "")
-                        emit(Text(_snippet, style="dim"))
+                        emit(Text(_snippet, style=f"{_th.get('dim', 'dim')}"))
 
                     tc_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
                     history.append({"role": "tool", "tool_call_id": tc_id, "content": output})
@@ -2000,8 +2227,11 @@ def run_turn_tui(history: list[dict], selection: Selection, status_bar: StatusBa
                     total = len(_current_todos)
                     bar_len = 12
                     filled = int(bar_len * done / total) if total > 0 else 0
-                    bar = "█" * filled + "░" * (bar_len - filled)
-                    emit(Text(f"[{bar}] {done}/{total}", style="dim"))
+                    _bar_txt = Text(f"[", style=f"{_th.get('separator', 'dim')}")
+                    _bar_txt.append("█" * filled, style=f"{_th.get('success', 'green')}")
+                    _bar_txt.append("░" * (bar_len - filled), style=f"{_th.get('separator', 'dim')}")
+                    _bar_txt.append(f"] {done}/{total}", style=f"{_th.get('dim', 'dim')}")
+                    emit(_bar_txt)
                 continue
             else:
                 # Smart auto-continue (same heuristics as classic path).
@@ -2044,7 +2274,10 @@ def run_turn_tui(history: list[dict], selection: Selection, status_bar: StatusBa
                 break
 
         except Exception as e:
-            emit(Text(f"✗ {redact_display(str(e))}", style="red"))
+            emit(Text(f"✗ {redact_display(str(e))}", style=f"{_th.get('error', 'red')}"))
+            # Close any outstanding tool_calls so history never ends with
+            # orphaned calls (that would poison the next provider request).
+            _append_interrupted_tool_results(history)
             break
 
     cost_summary = _cost_tracker.session_total()
@@ -2052,7 +2285,8 @@ def run_turn_tui(history: list[dict], selection: Selection, status_bar: StatusBa
     real_cost = cost_summary["total_cost"]
     if real_tok == 0:
         real_tok, real_cost = estimate_cost(selection.model, total_input_chars, total_output_chars)
-    emit(Text(f"{status_bar.context_pct}% ctx · {real_tok:,} tok · ${real_cost:.4f} · {get_approval_mode().value}", style="dim"))
+    emit(Text(f"{status_bar.context_pct}% ctx · {real_tok:,} tok · ${real_cost:.4f} · {get_approval_mode().value}",
+              style=f"{_th.get('dim', 'dim')}"))
     emit(Text(""))
 
     return history, selection
@@ -2180,8 +2414,13 @@ def handle_command(value: str, history: list[dict], selection: Selection, status
 
     if cmd == "/new":
         history.clear()
+        _current_todos.clear()
         console.print("[green]✓[/green] New session started.")
-        return True, None, None
+        # Rotate the session id so the next autosave starts a fresh session
+        # instead of overwriting the previous one. main() adopts this id via
+        # the third return value (load_session returns None for a brand-new
+        # id, which is fine — history was just cleared).
+        return True, None, generate_session_id()
 
     if cmd == "/clear":
         console.clear()
@@ -2892,7 +3131,10 @@ def _run_textual_tui(selection: Selection, status_bar: StatusBar,
         try:
             if len(hist) > 2:
                 title = generate_session_title(hist[:4], sel)
-                save_session(session_id, title, sel.provider, sel.model,
+                # Read the CURRENT backend.session_id at save time (not the
+                # captured original) so /resume and /new save to the right
+                # session. ``backend`` is resolved late, at call time.
+                save_session(backend.session_id, title, sel.provider, sel.model,
                              get_approval_mode().value, hist)
         except Exception:
             pass
@@ -2913,11 +3155,12 @@ def _run_textual_tui(selection: Selection, status_bar: StatusBar,
     app = OpsoraApp(backend)
     app.run()
 
-    # Final save on exit.
+    # Final save on exit. Use the CURRENT backend.session_id (it may have been
+    # rotated by /resume or /new during the session).
     if backend.history:
         try:
             title = generate_session_title(backend.history[:4], backend.selection)
-            save_session(session_id, title, backend.selection.provider,
+            save_session(backend.session_id, title, backend.selection.provider,
                          backend.selection.model, get_approval_mode().value,
                          backend.history)
         except Exception:
@@ -3065,7 +3308,10 @@ def main():
                     session_data = load_session(resume_id)
                     if session_data:
                         history = session_data.messages
-                        session_id = resume_id
+                    # Adopt the returned id whether it names an existing
+                    # session (/resume) or a freshly generated one (/new) —
+                    # otherwise the next autosave overwrites the wrong session.
+                    session_id = resume_id
                 if not cont:
                     break
                 continue

@@ -107,6 +107,31 @@ def _tool_call_groups(messages: list[dict]) -> list[list[int]]:
             current = None
     return groups
 
+
+def _enforce_budget(result: list[dict], token_budget: int) -> list[dict]:
+    """Best-effort second pass: if the assembled result still exceeds the
+    budget, truncate the content of non-protected messages until it fits.
+
+    Protected: every system message and the last six messages (the recent
+    window). Never mutates the caller's original message dicts.
+    """
+    if _messages_tokens(result) <= token_budget:
+        return result
+    protected = set(range(max(0, len(result) - 6), len(result)))
+    candidates = [
+        i for i in range(len(result))
+        if i not in protected and result[i].get("role") != "system"
+    ]
+    for cap in (400, 160, 40):
+        for i in candidates:
+            content = result[i].get("content") or ""
+            if len(content) > cap:
+                result[i] = {**result[i], "content": content[:cap] + "…"}
+        if _messages_tokens(result) <= token_budget:
+            break
+    return result
+
+
 def compress(messages: list[dict], token_budget: int = 24000) -> list[dict]:
     """Compress conversation history to fit within token budget.
 
@@ -119,6 +144,8 @@ def compress(messages: list[dict], token_budget: int = 24000) -> list[dict]:
        kept tool result never loses the assistant call that produced it
     5. Summarize old assistant+tool messages via fast LLM
     6. Fallback to truncation if LLM fails
+    7. Final budget re-check: if the assembled result still exceeds the
+       budget, progressively truncate non-protected message content
     """
     if not messages:
         return messages
@@ -159,10 +186,10 @@ def compress(messages: list[dict], token_budget: int = 24000) -> list[dict]:
         else:
             compress_msgs.append(m)
     if not compress_msgs:
-        return messages
+        return _enforce_budget(list(messages), token_budget)
     # Try LLM summarization, fallback to truncation
     summary = _summarize_with_llm(compress_msgs) or _truncate_fallback(compress_msgs)
     result: list[dict] = list(system_msgs)
     result.append({"role": "system", "content": f"[Ringkasan konteks sebelumnya]\n{summary}"})
     result.extend(keep_msgs)
-    return result
+    return _enforce_budget(result, token_budget)

@@ -20,7 +20,7 @@ import time
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional, List, Dict
+from typing import Any, Callable, Optional, List, Dict
 from datetime import datetime
 
 from rich.console import Console
@@ -52,90 +52,26 @@ from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 console = Console(soft_wrap=True, highlight=True)
 
 # ============================================================================
-# THEME SYSTEM — Beautiful gradient color palettes
+# THEME SYSTEM — thin view over opsora_themes (single source of truth)
 # ============================================================================
+# The palettes live in opsora_themes.py; this module only keeps the nested
+# {"name", "description", "colors"} shape its classic rendering helpers
+# historically used, plus the mutable _COLORS view for live theme switching.
+
+from opsora_themes import THEMES as _THEME_SOURCE  # noqa: E402
+
+
+def _nested_theme(flat: Dict[str, str]) -> Dict[str, Any]:
+    colors = {k: v for k, v in flat.items() if k not in ("name", "description")}
+    return {
+        "name": flat.get("name", ""),
+        "description": flat.get("description", ""),
+        "colors": colors,
+    }
+
 
 THEMES: Dict[str, Dict[str, Any]] = {
-    "dark": {
-        "name": "Dark Ocean",
-        "description": "Calm dark theme for late nights",
-        "colors": {
-            "accent": "#5fb8c0",
-            "accent_bright": "#8fd8e8",
-            "success": "#6abf69",
-            "warning": "#d4a843",
-            "error": "#d45555",
-            "dim": "#6a6a7a",
-            "prompt": "#5fb8c0",
-            "border": "#3a3a4a",
-            "bg": "#0d1117",
-            "bg_secondary": "#161b22",
-            "text": "#e6edf3",
-            "text_secondary": "#8b949e",
-            "tool_bg": "#161b22",
-            "header": "#4a8fa8",
-        }
-    },
-    "light": {
-        "name": "Light Paper",
-        "description": "Clean light theme for daylight",
-        "colors": {
-            "accent": "#0070c0",
-            "accent_bright": "#4da8da",
-            "success": "#28a745",
-            "warning": "#e67e22",
-            "error": "#dc3545",
-            "dim": "#6c757d",
-            "prompt": "#0070c0",
-            "border": "#dee2e6",
-            "bg": "#ffffff",
-            "bg_secondary": "#f8f9fa",
-            "text": "#212529",
-            "text_secondary": "#6c757d",
-            "tool_bg": "#f8f9fa",
-            "header": "#0070c0",
-        }
-    },
-    "cyber": {
-        "name": "Cyber Neon",
-        "description": "High contrast cyberpunk aesthetic",
-        "colors": {
-            "accent": "#00ffff",
-            "accent_bright": "#80ffff",
-            "success": "#00ff88",
-            "warning": "#ffaa00",
-            "error": "#ff4444",
-            "dim": "#8888ff",
-            "prompt": "#00ffff",
-            "border": "#00ffff",
-            "bg": "#0a0a0a",
-            "bg_secondary": "#121212",
-            "text": "#ffffff",
-            "text_secondary": "#aaaaaa",
-            "tool_bg": "#1a0033",
-            "header": "#ff00ff",
-        }
-    },
-    "warm": {
-        "name": "Warm Sunset",
-        "description": "Cozy warm tones for comfort",
-        "colors": {
-            "accent": "#ff6b35",
-            "accent_bright": "#ff9a5c",
-            "success": "#4ade80",
-            "warning": "#fbbf24",
-            "error": "#f87171",
-            "dim": "#a855f7",
-            "prompt": "#ff6b35",
-            "border": "#f97316",
-            "bg": "#1c1917",
-            "bg_secondary": "#292524",
-            "text": "#fafaf9",
-            "text_secondary": "#a8a29e",
-            "tool_bg": "#292524",
-            "header": "#f97316",
-        }
-    },
+    name: _nested_theme(flat) for name, flat in _THEME_SOURCE.items()
 }
 
 _CURRENT_THEME = "dark"
@@ -155,7 +91,9 @@ def apply_theme(name: str) -> bool:
     if name not in THEMES:
         return False
     _CURRENT_THEME = name
-    _COLORS.update(THEMES[name]["colors"])
+    # Replace (not merge) so keys removed from a palette cannot leak across
+    # theme switches.
+    _COLORS = THEMES[name]["colors"].copy()
     return True
 
 def get_current_theme() -> str:
@@ -275,6 +213,22 @@ class ApprovalMode(Enum):
 APPROVAL_MODES = list(ApprovalMode)
 _current_approval_mode = ApprovalMode.FULL_AUTO
 
+# Injectable approval hook: under the Textual TUI stdin is owned by the app,
+# so prompt_approval() cannot block on console.input(). The TUI layer
+# registers a callback here; None keeps the classic stdin prompt.
+ApprovalHook = Optional[Callable[[str, str], Optional[bool]]]
+_approval_hook: ApprovalHook = None
+
+
+def set_approval_hook(hook: ApprovalHook) -> None:
+    """Register a TUI callback for approvals; None restores classic stdin."""
+    global _approval_hook
+    _approval_hook = hook
+
+
+def get_approval_hook() -> ApprovalHook:
+    return _approval_hook
+
 
 def get_approval_mode() -> ApprovalMode:
     try:
@@ -305,7 +259,13 @@ def needs_approval(action_type: str) -> bool:
 
 
 def prompt_approval(action: str, detail: str = "") -> bool:
-    console.print(Text(f"  ⚠ {action}", style=f"bold {_c('warning')}"))
+    if _approval_hook is not None:
+        try:
+            result = _approval_hook(action, detail)
+        except Exception:
+            return False
+        return bool(result)
+    console.print(Text(f"  ! {action}", style=f"bold {_c('warning')}"))
     if detail:
         console.print(Text(f"    {redact_display(detail)[:200]}", style="dim"))
     try:
@@ -313,13 +273,6 @@ def prompt_approval(action: str, detail: str = "") -> bool:
         return answer in ("", "y", "yes")
     except (EOFError, KeyboardInterrupt):
         return False
-
-# ============================================================================
-# COLOR HELPER
-# ============================================================================
-
-def _c(key: str) -> str:
-    return _COLORS.get(key, "#ffffff")
 
 # ============================================================================
 # STATUS BAR — Animated with activity timeline
@@ -334,7 +287,7 @@ class StatusBar:
     context_total: int = 0
     session_tokens: int = 0
     cwd: str = "/root"
-    current_activity: str = "🟢 Ready"
+    current_activity: str = "Siap"
     activity_history: List[Dict] = field(default_factory=list)
     last_update: float = 0
 
@@ -759,8 +712,9 @@ def _gradient_steps(hex_color: str, steps: int) -> List[str]:
         return [hex_color] * steps
     out = []
     for i in range(steps):
-        # Scale from 1.0 (full brightness) down to 0.35
-        f = 1.0 - (0.65 * i / max(1, steps - 1))
+        # Scale from 1.0 (full brightness) down to 0.65 — the old 0.35 floor
+        # faded the bottom logo lines into near-invisibility (task L3).
+        f = 1.0 - (0.35 * i / max(1, steps - 1))
         out.append("#{:02x}{:02x}{:02x}".format(
             int(r * f), int(g * f), int(b * f)))
     return out
@@ -793,25 +747,51 @@ def print_welcome(model: str, tools_count: int, approval: ApprovalMode, provider
     console.print()
 
     # Provider health — colored ● dots (render reliably on Android terminals,
-    # unlike emoji which show as boxes).
+    # unlike emoji which show as boxes). The box width tracks the console
+    # width (capped at 72); every row — top border, data rows, bottom border —
+    # is exactly box_w cells wide and data rows are closed on the right.
+    # On narrow phones (<44 cols) we drop the box and print plain rows.
     health = get_provider_health()
-    name_w = max(len(h["name"]) for h in health) + 2
-    inner_w = name_w + 3 + 46  # dot + name + models
-    console.print(Text(f"  ┌─ Provider Health ─{'─' * max(0, inner_w - 19)}┐", style=border_c))
-    for h in health:
-        if h["available"]:
-            dot = Text("● ", style=f"bold {success_c}")
-            row_style = ""
-        else:
-            dot = Text("● ", style=f"{error_c}")
-            row_style = "dim"
-        model_list = ", ".join(h["models"][:3])
-        row = Text("  │ ", style=border_c)
-        row.append_text(dot)
-        row.append(f"{h['name']:<{name_w}}", style=f"bold {row_style}")
-        row.append(model_list, style=row_style or dim_c)
-        console.print(row)
-    console.print(Text(f"  └{'─' * inner_w}┘", style=border_c))
+    name_w = max(len(h["name"]) for h in health)
+    box_w = min(72, console.width)
+
+    if box_w < 44:
+        # Phone fallback: borderless "● Name" rows.
+        for h in health:
+            row = Text("  ")
+            if h["available"]:
+                row.append("● ", style=f"bold {success_c}")
+                row.append(h["name"], style="bold")
+            else:
+                row.append("● ", style=error_c)
+                row.append(h["name"], style="dim")
+            console.print(row)
+    else:
+        model_w = box_w - 9 - name_w  # fixed model column (dot/name/gaps/borders = 9 + name_w)
+
+        def _fit(s: str) -> str:
+            return s if len(s) <= model_w else s[: model_w - 1] + "…"
+
+        title_seg = "─ Provider Health "  # 19 cells
+        top_fill = max(0, box_w - 2 - 1 - len(title_seg) - 1)
+        console.print(Text("  ┌" + title_seg + "─" * top_fill + "┐", style=border_c))
+        for h in health:
+            if h["available"]:
+                dot_style = f"bold {success_c}"
+                name_style = "bold"
+                model_style = dim_c
+            else:
+                dot_style = error_c
+                name_style = "bold dim"
+                model_style = "dim"
+            models = _fit(", ".join(h["models"][:3]))
+            row = Text("  │ ", style=border_c)
+            row.append("● ", style=dot_style)
+            row.append(f"{h['name']:<{name_w}} ", style=name_style)
+            row.append(f"{models:<{model_w}}", style=model_style)
+            row.append(" │", style=border_c)
+            console.print(row)
+        console.print(Text("  └" + "─" * (box_w - 4) + "┘", style=border_c))
 
     console.print()
     console.print(Text(f"  {tools_count} tools · {model} · {get_approval_mode().value} mode", style="dim"))
@@ -1035,9 +1015,11 @@ def _print_welcome_banner() -> None:
 __all__ = [
     "console", "redact_display", "ApprovalMode", "get_approval_mode", "set_approval_mode",
     "cycle_approval_mode", "needs_approval", "prompt_approval", "get_approval_mode",
+    "set_approval_hook", "get_approval_hook",
     "StatusBar", "stream_markdown", "render_tool_call", "render_file_tree",
     "render_file_edit", "render_help", "print_welcome", "print_welcome_banner",
     "codex_prompt", "toggle_verbose", "is_verbose", "apply_theme", "get_theme_names",
     "get_current_theme", "set_theme_colors", "THEMES", "_c", "_COLORS",
+    "get_provider_health", "_gradient_steps",
     "render_tool_call", "render_file_edit", "render_help", "print_welcome",
 ]

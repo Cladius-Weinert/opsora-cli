@@ -5,7 +5,7 @@ resources, prompts, health checks, auto-reconnect. Sync only, stdlib only.
 """
 from __future__ import annotations
 
-import json, os, shlex, subprocess, threading, time
+import json, os, select, shlex, subprocess, threading, time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -85,6 +85,20 @@ class MCPClient_v2:
     def _connect_stdio(self, srv: MCPServer_v2) -> None:
         if not srv.command:
             return
+        # M2: start from clean slate
+        srv.tools = []
+        srv.resources = []
+        srv.prompts = []
+        # M2: kill any leaked process before spawning a new one
+        if srv.process is not None and srv.process.poll() is None:
+            try:
+                srv.process.terminate()
+                srv.process.wait(timeout=2)
+            except Exception:
+                try:
+                    srv.process.kill()
+                except Exception:
+                    pass
         # shlex.split honors quoted arguments ("python server.py --name 'my srv'")
         # where str.split would mis-split inside the quotes.
         srv.process = subprocess.Popen(
@@ -129,6 +143,10 @@ class MCPClient_v2:
     def _connect_http(self, srv: MCPServer_v2, is_sse: bool = False) -> None:
         if not srv.url:
             return
+        # M2: start from clean slate
+        srv.tools = []
+        srv.resources = []
+        srv.prompts = []
         base = srv.url.rstrip("/")
         if is_sse:
             base = base.rsplit("/sse", 1)[0].rstrip("/"); srv.url = base
@@ -167,13 +185,47 @@ class MCPClient_v2:
                     if srv.transport == "stdio"
                     else self._http_post(f"{srv.url.rstrip('/')}/mcp/tools/call",
                                          {"name": actual, "arguments": arguments}, timeout=30))
+            # M4: transport failure (broken pipe / EOF / timeout) returns None
+            if resp is None:
+                raise ConnectionError(f"MCP server '{srv.name}' tidak merespons")
+            # M5: successful response resets reconnect counter
+            srv.reconnect_attempts = 0
         except Exception:
             if srv.reconnect_attempts < srv.max_reconnect:
-                srv.reconnect_attempts += 1; srv.connected = False
-                self.connect_all()
+                srv.reconnect_attempts += 1
+                srv.connected = False
+                self._reconnect_server(srv)
                 return self.call_tool(server_name, tool_name, arguments)
             return "Tool call gagal dan reconnect gagal."
         return self._extract_text(resp)
+
+    def _reconnect_server(self, srv: MCPServer_v2) -> None:
+        """Reconnect only the given server (M2: no global reconnect)."""
+        # Kill existing process if any
+        if srv.process is not None:
+            try:
+                if srv.process.poll() is None:
+                    srv.process.terminate()
+                    srv.process.wait(timeout=2)
+            except Exception:
+                try:
+                    srv.process.kill()
+                except Exception:
+                    pass
+            srv.process = None
+        # Clear stale discovery data
+        srv.tools = []
+        srv.resources = []
+        srv.prompts = []
+        srv.connected = False
+        # Reconnect
+        try:
+            if srv.transport == "stdio":
+                self._connect_stdio(srv)
+            else:
+                self._connect_http(srv, is_sse=(srv.transport == "sse"))
+        except Exception as e:
+            console.print(f"  [red]○[/red] MCP [bold]{srv.name}[/bold]: {e}")
 
     def call_tool_full(self, full_name: str, arguments: dict) -> str:
         """Call a tool by its full ``mcp__<server>__<tool>`` name.
@@ -269,6 +321,7 @@ class MCPClient_v2:
                     is_notification: bool = False, timeout: int = 15) -> Optional[dict]:
         if not srv.process or not srv.process.stdin or not srv.process.stdout:
             return None
+        # M1: hold lock only around id increment + message build + write
         with self._lock:
             self._request_id += 1
             msg: dict[str, Any] = {"jsonrpc": "2.0", "method": method, "params": params}
@@ -280,38 +333,78 @@ class MCPClient_v2:
                 srv.process.stdin.write(header + body); srv.process.stdin.flush()
             except (BrokenPipeError, OSError):
                 srv.connected = False; return None
-            return None if is_notification else self._read_stdio_response(srv)
+            request_id = self._request_id
+        # M1: lock released before reading
+        if is_notification:
+            return None
+        deadline = time.monotonic() + timeout
+        return self._read_stdio_response(srv, request_id, deadline)
 
-    def _read_stdio_response(self, srv: MCPServer_v2) -> Optional[dict]:
+    def _read_stdio_response(self, srv: MCPServer_v2, request_id: int,
+                             deadline: float) -> Optional[dict]:
+        """Read framed JSON-RPC response matching the given request_id.
+
+        Loops until the matching response arrives, skipping notifications
+        and non-matching responses. Uses select.select for timeout enforcement
+        with a try/except fallback for mock objects in tests.
+        """
         if not srv.process or not srv.process.stdout:
             return None
-        try:
-            cl = 0
-            while True:
-                line = srv.process.stdout.readline()
-                if not line:
-                    return None
-                ls = (line.decode("ascii", errors="replace") if isinstance(line, bytes) else line).strip()
-                if not ls:
-                    break
-                if ls.lower().startswith("content-length:"):
-                    cl = int(ls.split(":")[1].strip())
-            if cl == 0:
-                raw = srv.process.stdout.readline()
-                if not raw:
-                    return None
-                data = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
-            else:
-                body = srv.process.stdout.read(cl)
-                data = json.loads(body.decode("utf-8") if isinstance(body, bytes) else body)
+        stdout = srv.process.stdout
+        while True:
+            # M1: enforce deadline with select.select
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("MCP server timeout")
+            try:
+                rlist, _, _ = select.select([stdout], [], [], remaining)
+                if not rlist:
+                    raise TimeoutError("MCP server timeout")
+            except (OSError, ValueError, TypeError):
+                # Fall through to blocking read for mock objects in tests
+                pass
+            try:
+                cl = 0
+                while True:
+                    line = stdout.readline()
+                    if not line:
+                        return None
+                    ls = (line.decode("ascii", errors="replace") if isinstance(line, bytes) else line).strip()
+                    if not ls:
+                        break
+                    if ls.lower().startswith("content-length:"):
+                        cl = int(ls.split(":")[1].strip())
+                if cl == 0:
+                    raw = stdout.readline()
+                    if not raw:
+                        return None
+                    data = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+                else:
+                    body = stdout.read(cl)
+                    data = json.loads(body.decode("utf-8") if isinstance(body, bytes) else body)
+            except (json.JSONDecodeError, OSError, ValueError):
+                return None
+
+            # M3: match response by id
+            msg_id = data.get("id")
+            has_method = "method" in data
+            has_result = "result" in data
+            has_error = "error" in data
+
+            if msg_id is not None and msg_id != request_id:
+                # Non-matching response — skip, keep waiting
+                continue
+            if msg_id is None and has_method:
+                # Notification — skip
+                continue
+            # Accept: matching id, or id-less result/error (lenient for tests/non-strict servers)
             if "result" in data:
-                return data["result"]
+                result = data["result"]
+                return result if result is not None else {}
             if "error" in data:
                 err = data["error"]
                 return {"error": err.get("message", str(err)) if isinstance(err, dict) else str(err)}
             return data
-        except (json.JSONDecodeError, OSError, ValueError):
-            return None
 
     # -- HTTP helpers --
 

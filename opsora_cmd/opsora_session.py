@@ -18,7 +18,10 @@ DB_PATH = Path("/root/.opsora/sessions.db")
 
 def _conn() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), timeout=10.0)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
@@ -96,18 +99,19 @@ def save_session(
     now = time.time()
     conn = _conn()
     try:
-        existing = conn.execute("SELECT id FROM sessions WHERE id = ?", (session_id,)).fetchone()
-        if existing:
-            conn.execute(
-                "UPDATE sessions SET title=?, provider=?, model=?, updated_at=?, token_count=?, approval_mode=? WHERE id=?",
-                (title, provider, model, now, _estimate_tokens(messages), approval_mode, session_id),
-            )
-            conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
-        else:
-            conn.execute(
-                "INSERT INTO sessions (id, title, provider, model, created_at, updated_at, token_count, approval_mode) VALUES (?,?,?,?,?,?,?,?)",
-                (session_id, title, provider, model, now, now, _estimate_tokens(messages), approval_mode),
-            )
+        conn.execute(
+            """INSERT INTO sessions (id, title, provider, model, created_at, updated_at, token_count, approval_mode)
+               VALUES (?,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                   title=excluded.title,
+                   provider=excluded.provider,
+                   model=excluded.model,
+                   updated_at=excluded.updated_at,
+                   token_count=excluded.token_count,
+                   approval_mode=excluded.approval_mode""",
+            (session_id, title, provider, model, now, now, _estimate_tokens(messages), approval_mode),
+        )
+        conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
 
         for msg in messages:
             if not isinstance(msg, dict):

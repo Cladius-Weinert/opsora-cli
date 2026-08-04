@@ -247,10 +247,13 @@ def _score_model(intent: str, model: str, prefer_cost: bool, prefer_speed: bool)
     elif intent == "quick" and any(kw in model_lower for kw in _MODEL_CAPABILITIES["fast"]):
         score += 8
 
-    # Cost preference
+    # Cost preference — capped so it biases selection without ever
+    # overriding intent fit. Uncapped, free models (cost 0.0) scored
+    # 5.0/0.1 = +50, dwarfing the intent score (<= 10) so a free but
+    # wrong model always won when prefer_cost=True.
     if prefer_cost:
         cost = _DEFAULT_COSTS.get(model, (1.0, 2.0))
-        score += 5.0 / (cost[0] + cost[1] + 0.1)
+        score += min(5.0 / (cost[0] + cost[1] + 0.1), 5.0)
 
     # Speed preference
     if prefer_speed and any(kw in model_lower for kw in _MODEL_CAPABILITIES["fast"]):

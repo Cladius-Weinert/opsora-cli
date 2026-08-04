@@ -19,6 +19,7 @@ from typing import Any, Callable, List, Optional
 
 from rich.console import Group, RenderableType
 from rich.markdown import Markdown
+from rich.rule import Rule
 from rich.text import Text
 
 from textual import work
@@ -27,6 +28,28 @@ from textual.containers import Container, Vertical
 from textual.widgets import Input, RichLog, Static
 
 from opsora_themes import get_theme, load_theme_preference
+
+
+# ---------------------------------------------------------------------------
+# Shared wording / layout constants
+# ---------------------------------------------------------------------------
+
+# One canonical tagline (task W2): same casing in the banner and welcome box.
+TAGLINE = "One terminal · Every AI provider · Zero lock-in"
+
+# Below this width the full 55-char ASCII logo and boxed provider health do
+# not fit (Android/Termux phones run ~50-70 cols) — use compact fallbacks.
+NARROW_WIDTH = 60
+
+# Full block-art logo (55 chars wide). Rendered with an accent gradient.
+LOGO_LINES = [
+    " ██████╗ ██╗   ██╗ ██████╗ ██████╗ ███████╗███╗   ██╗",
+    " ██╔══██╗╚██╗ ██╔╝██╔════╝ ██╔══██╗██╔════╝████╗  ██║",
+    " ██████╔╝ ╚████╔╝ ██║     ██████╔╝█████╗  ██╔██╗ ██║",
+    " ██╔═══╝   ╚██╔╝  ██║     ██╔═══╝ ██╔══╝  ██║╚██╗██║",
+    " ██║        ██║  ███████╗██║     ███████╗██║ ╚████║",
+    " ╚═╝        ╚═╝  ╚══════╝╚═╝     ╚══════╝╚═╝  ╚═══╝",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -64,28 +87,43 @@ class TuiBackend:
 class ThinkingIndicator(Static):
     """Animated spinner shown while a turn is running.
 
-    Stays mounted just above the input box; ``start``/``stop`` toggle its
-    visibility and a timer drives the spinner frames. The message updates live
-    (e.g. "Berpikir…" → "Menjalankan read_file…") so the user always sees what
-    Opsora is doing — the same affordance Qwen Code's thinking indicator gives.
+    Stays mounted just above the input box for the whole session. When idle
+    it renders a single empty line (reserved space), so showing/hiding the
+    spinner content never reflows the scrolling log (task L7). ``active``
+    tracks whether a turn is running.
+
+    Spinner frames are plain ASCII (task W3): the braille characters used
+    before (U+2800 block) render as tofu boxes on many Android monospace
+    fonts. The message updates live (e.g. "Berpikir" → "Menjalankan
+    read_file") so the user always sees what Opsora is doing.
     """
 
-    SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    # ASCII-safe line spinner (duplicated to 8 frames for smooth timing).
+    SPINNER_FRAMES = ["|", "/", "-", "\\", "|", "/", "-", "\\"]
 
-    def __init__(self, accent: str = "#00ffff", dim: str = "#8a8a9a",
-                 **kwargs: Any):
+    def __init__(self, accent: str = "#5fb8c0", dim: str = "#8b93a7",
+                 fg: str = "#e6e6f0", **kwargs: Any):
         super().__init__("", **kwargs)
         self._accent = accent
         self._dim = dim
+        self._fg = fg
         self._frame = 0
         self._message = "Berpikir"
         self._thinking_text: Optional[str] = None
+        self._active = False
         self._timer = None
+        self._last_frame: Text = Text("")
+
+    @property
+    def active(self) -> bool:
+        """True while a turn is running (spinner/thinking content shown)."""
+        return self._active
 
     def start(self, message: str = "Berpikir") -> None:
         self._message = message
         self._thinking_text = None  # back to spinner mode
         self._frame = 0
+        self._active = True
         self._render_frame()
         self._ensure_timer()
         self.display = True
@@ -98,6 +136,7 @@ class ThinkingIndicator(Static):
     def stream_thinking(self, text: str) -> None:
         """Show streaming reasoning/thinking content (Qwen Code style)."""
         self._thinking_text = text
+        self._active = True
         self._ensure_timer()
         self.display = True
         self._render_frame()
@@ -119,7 +158,14 @@ class ThinkingIndicator(Static):
                 pass
             self._timer = None
         self._thinking_text = None
-        self.display = False
+        self._active = False
+        # Stay mounted with one empty line so the log above does not reflow
+        # (task L7).
+        self._last_frame = Text("")
+        try:
+            self.update(self._last_frame)
+        except Exception:
+            pass
 
     def on_unmount(self) -> None:
         self.stop()
@@ -134,15 +180,16 @@ class ThinkingIndicator(Static):
         if self._thinking_text:
             # Streaming thinking: spinner + label + last lines + cursor.
             t.append(f" {frame} ", style=f"bold {self._accent}")
-            t.append("thinking", style=f"italic {self._dim}")
+            t.append("berpikir", style=f"italic {self._dim}")
             lines = [ln for ln in self._thinking_text.strip().split("\n")]
             shown = "\n".join(lines[-5:])
             t.append("\n " + shown, style=f"italic {self._dim}")
-            t.append(" ▌", style=f"{self._accent}")
+            t.append(" _", style=f"{self._accent}")
         else:
             t.append(f" {frame} ", style=f"bold {self._accent}")
-            t.append(self._message, style=f"{self._accent}")
+            t.append(self._message, style=f"{self._fg}")
             t.append(" …", style=f"{self._dim}")
+        self._last_frame = t
         try:
             self.update(t)
         except Exception:
@@ -158,15 +205,17 @@ class OpsoraApp(App):
     """Persistent Opsora TUI: scrolling output on top, pinned input below."""
 
     TITLE = "Opsora"
-    SUB_TITLE = "multi-provider AI"
+    SUB_TITLE = TAGLINE  # W2: one canonical tagline, exposed to Textual too
 
-    # Structural layout only — colors are applied programmatically in
-    # ``_apply_widget_styles`` so they always follow the active Opsora theme
-    # and never depend on Textual design-token names (which vary by version).
+    # Structural layout only — colors come from the active Opsora theme via
+    # the instance-level ``self.CSS`` built in ``__init__`` (Textual has no
+    # focus/blur messages in 8.x, so the focus-aware input border must live
+    # in CSS as ``#inputbox:focus``).
     CSS = """
     #banner {
         height: auto;
         padding: 0 1;
+        margin: 0 0 1 0;
     }
     #log {
         height: 1fr;
@@ -198,11 +247,32 @@ class OpsoraApp(App):
     ]
 
     def __init__(self, backend: TuiBackend, theme_name: Optional[str] = None):
-        super().__init__()
         self.backend = backend
         self._theme_name = theme_name or load_theme_preference()
         self._theme = get_theme(self._theme_name)
         self._busy = False
+        # Status-bar state (task B4: actually rendered now).
+        self._activity = "Siap"
+        self._state = "ok"  # ok | busy | warn | error → colored status dot
+        # Instance CSS carries theme colors; must exist before App.__init__
+        # builds the stylesheet.
+        self.CSS = self._theme_css(self._theme)
+        super().__init__()
+
+    @staticmethod
+    def _theme_css(t: dict) -> str:
+        """Theme-colored CSS fragment (input border states, task L6).
+
+        Idle input: muted ``panel_border``. Focused input: ``accent``.
+        Inline programmatic styles would outrank CSS, so the input border is
+        owned exclusively here.
+        """
+        panel_border = t.get("panel_border", t.get("border", "#4a4a5f"))
+        accent = t.get("accent", "#5fb8c0")
+        return (
+            f"#inputbox {{ border: round {panel_border}; }}\n"
+            f"#inputbox:focus {{ border: round {accent}; }}\n"
+        )
 
     # -- layout --------------------------------------------------------------
 
@@ -211,18 +281,21 @@ class OpsoraApp(App):
         yield Static(self._banner_renderable(), id="banner")
         yield RichLog(id="log", markup=True, wrap=True, highlight=True)
         yield ThinkingIndicator(
-            accent=t.get("accent", "#00ffff"),
-            dim=t.get("dim", "#8a8a9a"),
+            accent=t.get("accent", "#5fb8c0"),
+            dim=t.get("dim", "#8b93a7"),
+            fg=t.get("fg", "#e6e6f0"),
             id="thinking")
         yield Input(
-            placeholder="Ketik pesan untuk Opsora…   Enter kirim · /help lihat perintah",
+            # Short on purpose: 60-char placeholders truncate on phone
+            # widths (task L6/W1).
+            placeholder="Ketik pesan di sini…",
             id="inputbox")
         yield Static(self._status_text(), id="statusbar")
 
     def on_mount(self) -> None:
         self._apply_widget_styles()
-        # Thinking indicator starts hidden; shown only while a turn runs.
-        self.query_one("#thinking", ThinkingIndicator).display = False
+        # Thinking indicator stays mounted (one reserved empty line when
+        # idle, task L7); only its content toggles.
         self.query_one("#inputbox", Input).focus()
         log = self.query_one("#log", RichLog)
         log.write(self._welcome_renderable())
@@ -233,12 +306,16 @@ class OpsoraApp(App):
     def _apply_widget_styles(self) -> None:
         t = self._theme
         bg = t.get("bg", "#1a1a2e")
-        fg = t.get("fg", "#e0e0e0")
-        accent = t.get("accent", "#00ffff")
-        dim = t.get("dim", "#8a8a9a")
-        # Slightly darker panel for the input + status bar.
-        panel = self._darken(bg, 0.25)
-        status_bg = self._darken(bg, 0.4)
+        fg = t.get("fg", "#e6e6f0")
+        accent = t.get("accent", "#5fb8c0")
+        # Explicit theme pairs win; _darken fallbacks keep old behaviour for
+        # themes that lack the key.
+        panel = t.get("panel", self._darken(bg, 0.25))
+        # Task TH4: light themes used to compute status bg = darken(white)
+        # = the same gray as the dim text → invisible bar. Themes now carry
+        # an explicit, contrast-checked status_bg/status_fg pair.
+        status_bg = t.get("status_bg", self._darken(bg, 0.4))
+        status_fg = t.get("status_fg", t.get("dim", "#8b93a7"))
 
         try:
             self.screen.styles.background = bg
@@ -256,7 +333,8 @@ class OpsoraApp(App):
         inp = self.query_one("#inputbox", Input)
         inp.styles.background = panel
         inp.styles.color = fg
-        inp.styles.border = ("tall", accent)
+        # Border intentionally NOT set here: the theme CSS owns it so the
+        # ``#inputbox:focus`` rule can swap muted → accent (task L6).
         inp.styles.caret_color = accent
 
         thinking = self.query_one("#thinking", ThinkingIndicator)
@@ -264,7 +342,7 @@ class OpsoraApp(App):
 
         status = self.query_one("#statusbar", Static)
         status.styles.background = status_bg
-        status.styles.color = dim
+        status.styles.color = status_fg
 
     @staticmethod
     def _darken(hex_color: str, amount: float) -> str:
@@ -283,103 +361,236 @@ class OpsoraApp(App):
     # -- renderables ---------------------------------------------------------
 
     def _banner_renderable(self) -> RenderableType:
+        """Banner wordmark + tagline + bottom rule (task L4).
+
+        The rule separates banner from log; ``Rule`` adapts to any width,
+        so nothing hardcodes a column count.
+        """
         t = self._theme
-        accent = t.get("accent", "#00ffff")
-        dim = t.get("dim", "#8a8a9a")
-        b = self.backend
+        accent = t.get("accent", "#5fb8c0")
+        secondary = t.get("secondary", t.get("dim", "#8b93a7"))
+        border = t.get("border", "#4a4a5f")
         line1 = Text()
         line1.append("OPSORA", style=f"bold {accent}")
-        line1.append("  one terminal · every AI provider", style=f"italic {dim}")
-        return line1
+        line2 = Text(TAGLINE, style=f"italic {secondary}")
+        return Group(line1, line2, Rule(style=border))
+
+    def _health_rows(self, width: int) -> List[Text]:
+        """Provider health as a CLOSED box with dynamic width (task L1).
+
+        Every row gets the same cell width, both side borders are drawn,
+        and the model list is truncated to fit. On very narrow widths the
+        box degrades to borderless dot rows instead of overflowing.
+        """
+        t = self._theme
+        success = t.get("success", "#6abf69")
+        error = t.get("error", "#d45555")
+        dim = t.get("dim", "#8b93a7")
+        border = t.get("border", "#4a4a5f")
+        health = self.backend.health
+        rows: List[Text] = []
+        if not health:
+            return rows
+
+        name_w = max(len(h.get("name", "")) for h in health) + 2
+        # Row shape: " │ " + "● " + name + " " + models + " │"
+        overhead = 3 + 2 + 1 + 2
+        models_w = min(34, width - overhead - name_w - 2)
+
+        if models_w < 12:  # too narrow for a box — borderless fallback
+            for h in health:
+                row = Text(" ")
+                if h.get("available"):
+                    row.append("● ", style=f"bold {success}")
+                    row.append(h.get("name", ""), style="bold")
+                else:
+                    row.append("● ", style=error)
+                    row.append(h.get("name", ""), style=dim)
+                rows.append(row)
+            return rows
+
+        total_w = overhead + name_w + models_w
+        title = " Provider Health "
+        top = Text(" ┌─", style=border)
+        top.append(title, style=f"bold {dim}")
+        top.append("─" * max(0, total_w - len(top.plain) - 1), style=border)
+        top.append("┐", style=border)
+        rows.append(top)
+
+        for h in health:
+            models = ", ".join(h.get("models", [])[:3])
+            if len(models) > models_w:
+                models = models[: models_w - 1] + "…"
+            row = Text(" │ ", style=border)
+            if h.get("available"):
+                row.append("● ", style=f"bold {success}")
+                row.append(f"{h.get('name', ''):<{name_w}}", style="bold")
+            else:
+                row.append("● ", style=error)
+                row.append(f"{h.get('name', ''):<{name_w}}", style=dim)
+            row.append(" ", style=border)
+            row.append(f"{models:<{models_w}}", style=dim)
+            row.append(" │", style=border)
+            rows.append(row)
+
+        bottom = Text(" └", style=border)
+        bottom.append("─" * (total_w - 3), style=border)
+        bottom.append("┘", style=border)
+        rows.append(bottom)
+        return rows
 
     def _welcome_renderable(self) -> RenderableType:
         t = self._theme
-        accent = t.get("accent", "#00ffff")
-        success = t.get("success", "#00ff88")
-        error = t.get("error", "#ff4444")
-        dim = t.get("dim", "#8a8a9a")
-        border = t.get("border", "#444444")
+        accent = t.get("accent", "#5fb8c0")
+        secondary = t.get("secondary", t.get("dim", "#8b93a7"))
+        dim = t.get("dim", "#8b93a7")
         b = self.backend
+        try:
+            width = self.size.width
+        except Exception:
+            width = 80
 
         lines: List[Text] = []
-        logo = [
-            " ██████╗ ██╗   ██╗ ██████╗ ██████╗ ███████╗███╗   ██╗",
-            " ██╔══██╗╚██╗ ██╔╝██╔════╝ ██╔══██╗██╔════╝████╗  ██║",
-            " ██████╔╝ ╚████╔╝ ██║     ██████╔╝█████╗  ██╔██╗ ██║",
-            " ██╔═══╝   ╚██╔╝  ██║     ██╔═══╝ ██╔══╝  ██║╚██╗██║",
-            " ██║        ██║  ███████╗██║     ███████╗██║ ╚████║",
-            " ╚═╝        ╚═╝  ╚══════╝╚═╝     ╚══════╝╚═╝  ╚═══╝",
-        ]
-        from opsora_tui import _gradient_steps
-        for line, color in zip(logo, _gradient_steps(accent, len(logo))):
-            lines.append(Text(line, style=f"bold {color}"))
-        lines.append(Text("     One terminal · Every AI provider · Zero lock-in",
-                          style=f"italic {dim}"))
+        if width >= NARROW_WIDTH:
+            # Full block-art logo with a gradient that stays readable: the
+            # fade floor was raised (task L3, see opsora_tui._gradient_steps).
+            from opsora_tui import _gradient_steps
+            for line, color in zip(LOGO_LINES, _gradient_steps(accent, len(LOGO_LINES))):
+                lines.append(Text(line, style=f"bold {color}"))
+        else:
+            # Compact wordmark for ~50-col phone terminals (task L2): the
+            # 55-char art would wrap and shatter under RichLog(wrap=True).
+            mark = Text()
+            mark.append(" ● ", style=f"bold {accent}")
+            mark.append("OPSORA", style=f"bold {accent}")
+            lines.append(mark)
+        lines.append(Text(" " + TAGLINE, style=f"italic {secondary}"))
         lines.append(Text(""))
 
-        # Provider health with colored dots (reliable on Android terminals).
-        lines.append(Text(" ┌─ Provider Health ─────────────────────────────┐", style=border))
-        for h in b.health:
-            row = Text(" │ ")
-            if h.get("available"):
-                row.append("● ", style=f"bold {success}")
-                row.append(f"{h['name']:<20}", style="bold")
-            else:
-                row.append("● ", style=error)
-                row.append(f"{h['name']:<20}", style="dim")
-            row.append(", ".join(h.get("models", [])[:3]), style=dim)
-            lines.append(row)
-        lines.append(Text(" └───────────────────────────────────────────────┘", style=border))
+        lines.extend(self._health_rows(width))
         lines.append(Text(""))
+        # Info + help lines must fit phone widths too (task L2): drop the
+        # provider prefix and "mode" wording when the full line overflows.
+        info = f" {b.tools_count} tools · {b.provider}:{b.model} · mode {b.approval}"
+        if len(info) > width - 2:
+            model_short = b.model.split("/")[-1] if "/" in b.model else b.model
+            info = f" {b.tools_count} tools · {model_short} · {b.approval}"
+        lines.append(Text(info, style=dim))
         lines.append(Text(
-            f" {b.tools_count} tools · {b.provider}:{b.model} · mode {b.approval}",
-            style=dim))
-        lines.append(Text(
-            " /help perintah · /status detail · Ctrl+L bersihkan · ketik di bawah, jawaban di atas",
+            " /help bantuan · /status detail · Ctrl+L bersihkan",
             style=dim))
         return Group(*lines)
 
+    @staticmethod
+    def _fmt_tokens(n: int) -> str:
+        return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
     def _status_text(self) -> RenderableType:
+        """Status bar: state dot · model · ctx · mode · tokens · activity.
+
+        The dot reflects real state instead of a hardcoded green (task L5);
+        activity comes from ``_activity`` (task B4); segments are dropped
+        tail-first when the terminal is too narrow to fit them.
+        """
         t = self._theme
-        accent = t.get("accent", "#00ffff")
-        dim = t.get("dim", "#8a8a9a")
-        success = t.get("success", "#00ff88")
+        accent = t.get("accent", "#5fb8c0")
+        dim = t.get("dim", "#8b93a7")
+        success = t.get("success", "#6abf69")
+        warning = t.get("warning", "#d4a843")
+        error = t.get("error", "#d45555")
         b = self.backend
         sb = b.status_bar
         try:
             ctx = sb.context_pct
         except Exception:
             ctx = 0
+        try:
+            tokens = int(getattr(sb, "session_tokens", 0) or 0)
+        except Exception:
+            tokens = 0
+
+        ctx_left = max(0, 100 - ctx)
+        ctx_color = success if ctx_left > 40 else warning if ctx_left > 15 else error
+        dot_style = {
+            "ok": f"bold {success}",
+            "busy": f"bold {accent}",
+            "warn": f"bold {warning}",
+            "error": f"bold {error}",
+        }.get(self._state, f"bold {success}")
+
+        segments: List[tuple] = [
+            (" ● ", dot_style),
+            (f"{b.provider}:{b.model}", f"bold {accent}"),
+            (f" · ctx {ctx_left}%", ctx_color),
+            (f" · {b.approval}", dim),
+        ]
+        optional: List[tuple] = []
+        if tokens > 0:
+            optional.append((f" · {self._fmt_tokens(tokens)} tok", dim))
+        if self._activity:
+            activity = self._activity
+            if len(activity) > 24:
+                activity = activity[:23] + "…"
+            optional.append((f" · {activity}", dim))
+
+        try:
+            max_w = self.size.width - 2
+        except Exception:
+            max_w = 78
         txt = Text()
-        txt.append(" ● ", style=f"bold {success}")
-        txt.append(f"{b.provider}:{b.model}", style=f"bold {accent}")
-        txt.append("   ", style=dim)
-        txt.append(f"{100 - ctx}% ctx tersisa", style=dim)
-        txt.append("   ", style=dim)
-        txt.append(b.approval, style=dim)
+        for text, style in segments:
+            txt.append(text, style=style)
+        for text, style in optional:
+            if len(txt.plain) + len(text) > max_w:
+                break
+            txt.append(text, style=style)
         return txt
 
     # -- input handling ------------------------------------------------------
 
+    def _turn_separator(self) -> Text:
+        """Subtle full-width rule between turns (task L8)."""
+        sep = self._theme.get("separator", "#2a2a3e")
+        try:
+            w = max(8, self.size.width - 4)
+        except Exception:
+            w = 60
+        return Text("─" * w, style=sep)
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
-        event.input.value = ""
         if not text:
-            return
-        if self._busy:
-            self._append(Text("⏳ Masih memproses turn sebelumnya…", style="yellow"))
+            event.input.value = ""
             return
 
         if text.startswith("/"):
-            self._handle_slash(text)
+            # Only clear the input when the command was actually accepted;
+            # a busy-rejected command keeps its text (task B2).
+            if self._handle_slash(text):
+                event.input.value = ""
             return
 
+        if self._busy:
+            self._append(Text("Masih memproses, tunggu sebentar…",
+                              style=f"{self._theme.get('warning', '#d4a843')}"))
+            return
+
+        # Accepted: clear BEFORE doing work, and claim the busy flag on the
+        # UI thread NOW — not inside the worker — so two fast Enters can
+        # never both pass the guard (task B1).
+        event.input.value = ""
+        self._busy = True
+        self._state = "busy"
+        self._activity = "Memproses"
+
         log = self.query_one("#log", RichLog)
-        accent = self._theme.get("accent", "#00ffff")
-        dim = self._theme.get("dim", "#8a8a9a")
+        accent = self._theme.get("accent", "#5fb8c0")
         log.write(Text(""))
+        log.write(self._turn_separator())
         umsg = Text()
-        umsg.append("❯ ", style=f"bold {accent}")
+        # ">" instead of ❯ (U+276F renders as tofu on some Android fonts,
+        # task W3).
+        umsg.append("> ", style=f"bold {accent}")
         umsg.append(text, style="bold")
         log.write(umsg)
         self.backend.history.append({"role": "user", "content": text})
@@ -397,42 +608,79 @@ class OpsoraApp(App):
         self._refresh_status()
         self._run_turn_worker()
 
-    def _handle_slash(self, text: str) -> None:
+    def _handle_slash(self, text: str) -> bool:
+        """Handle a slash command. Returns True when the input was consumed
+        (accepted), False when rejected (e.g. busy) so the caller can keep
+        the text in the input box (task B2)."""
         parts = text.split()
         cmd = parts[0].lower()
+        success = self._theme.get("success", "#6abf69")
+        warning = self._theme.get("warning", "#d4a843")
+        dim = self._theme.get("dim", "#8b93a7")
 
         # Local-only commands that must act on the TUI itself.
         if cmd in ("/exit", "/quit", "/q"):
             self.exit()
-            return
+            return True
         if cmd in ("/clear", "/reset"):
             self.query_one("#log", RichLog).clear()
             self.backend.history.clear()
-            self._append(Text("✓ Layar & riwayat dibersihkan", style="green"))
-            return
+            self._append(Text("✓ Layar & riwayat dibersihkan", style=f"{success}"))
+            return True
 
         if self._busy:
-            self._append(Text("⏳ Masih memproses, tunggu sebentar…", style="yellow"))
-            return
+            self._append(Text("Masih memproses, tunggu sebentar…",
+                              style=f"{warning}"))
+            return False
 
         # Everything else is delegated to the engine's handle_command, whose
-        # console output we capture and render into the log (see worker below).
-        self._append(Text(f"❯ {text}", style="dim"))
+        # console output we capture and render into the log (see worker).
+        self._append(Text(f"> {text}", style=f"{dim}"))
+        # Claim busy on the UI thread before scheduling (task B1).
+        self._busy = True
+        self._state = "busy"
+        self._activity = "Menjalankan perintah"
+        self._refresh_status()
         self._run_slash_worker(text)
+        return True
 
     @work(thread=True, exclusive=True, group="slash")
     def _run_slash_worker(self, text: str) -> None:
-        self._busy = True
         self.call_from_thread(self._thinking_start, "Menjalankan perintah")
         b = self.backend
         try:
             from opsora_v2 import handle_command
             from opsora_tui import console as tui_console
 
-            with tui_console.capture() as capture:
-                cont, new_sel, resume_id = handle_command(
-                    text, b.history, b.selection, b.status_bar, b.session_id)
-            captured = capture.get()
+            # Task B3: the shared console is not a terminal under Textual,
+            # so capture() would strip colors. Force terminal mode, a sane
+            # width, and (Rich 15) a color system — _color_system is only
+            # auto-detected at construction, so a console created under a
+            # non-tty stays colorless even with force_terminal on. Restore
+            # everything afterwards so the classic path is unaffected.
+            prev_force = getattr(tui_console, "_force_terminal", None)
+            prev_width = getattr(tui_console, "_width", None)
+            prev_color_system = getattr(tui_console, "_color_system", None)
+            tui_console._force_terminal = True
+            if getattr(tui_console, "_color_system", None) is None:
+                try:
+                    from rich.console import COLOR_SYSTEMS
+                    tui_console._color_system = COLOR_SYSTEMS["truecolor"]
+                except Exception:
+                    pass
+            try:
+                tui_console._width = max(50, min(120, self.size.width - 2))
+            except Exception:
+                pass
+            try:
+                with tui_console.capture() as capture:
+                    cont, new_sel, resume_id = handle_command(
+                        text, b.history, b.selection, b.status_bar, b.session_id)
+                captured = capture.get()
+            finally:
+                tui_console._force_terminal = prev_force
+                tui_console._width = prev_width
+                tui_console._color_system = prev_color_system
             if captured.strip():
                 self.call_from_thread(self._append_ansi, captured)
 
@@ -450,7 +698,11 @@ class OpsoraApp(App):
             if not cont:
                 self.call_from_thread(self.exit)
         except Exception as e:  # noqa: BLE001
-            self.call_from_thread(self._append, Text(f"✗ {e}", style="bold red"))
+            self._state = "error"
+            self._activity = "Gagal"
+            self.call_from_thread(
+                self._append,
+                Text(f"✗ {e}", style=f"bold {self._theme.get('error', '#d45555')}"))
         finally:
             self._busy = False
             self.call_from_thread(self._thinking_stop)
@@ -479,7 +731,8 @@ class OpsoraApp(App):
 
     @work(thread=True, exclusive=True, group="turn")
     def _run_turn_worker(self) -> None:
-        self._busy = True
+        # NOTE: self._busy is claimed by the caller (on_input_submitted) on
+        # the UI thread, BEFORE this worker is scheduled (task B1).
         self.call_from_thread(self._thinking_start, "Berpikir")
         b = self.backend
 
@@ -506,8 +759,11 @@ class OpsoraApp(App):
                 except Exception:
                     pass
         except Exception as e:  # noqa: BLE001 — surface, don't crash the app
-            self.call_from_thread(self._append,
-                                  Text(f"✗ {e}", style="bold red"))
+            self._state = "error"
+            self._activity = "Gagal"
+            self.call_from_thread(
+                self._append,
+                Text(f"✗ {e}", style=f"bold {self._theme.get('error', '#d45555')}"))
         finally:
             self._busy = False
             self.call_from_thread(self._thinking_stop)
@@ -520,12 +776,19 @@ class OpsoraApp(App):
         self.query_one("#log", RichLog).write(renderable)
 
     def _thinking_start(self, message: str = "Berpikir") -> None:
+        self._state = "busy"
+        self._activity = message
+        self._refresh_status()
         try:
             self.query_one("#thinking", ThinkingIndicator).start(message)
         except Exception:
             pass
 
     def _thinking_message(self, message: str) -> None:
+        # Mirror live tool/activity progress into the status bar (task B4).
+        if message:
+            self._activity = message
+            self._refresh_status()
         try:
             self.query_one("#thinking", ThinkingIndicator).set_message(message)
         except Exception:
@@ -542,8 +805,14 @@ class OpsoraApp(App):
             self.query_one("#thinking", ThinkingIndicator).stop()
         except Exception:
             pass
+        # Only downgrade busy→ok; an error state set by the worker survives.
+        if self._state == "busy":
+            self._state = "ok"
+            self._activity = "Selesai"
+            self._refresh_status()
 
     def _set_activity(self, text: str) -> None:
+        # Rendered in the status bar (task B4 — was stored but never shown).
         self._activity = text
         self._refresh_status()
 
@@ -562,9 +831,11 @@ class OpsoraApp(App):
         self.query_one("#log", RichLog).clear()
 
     def action_interrupt(self) -> None:
-        self._set_activity("interrupted")
+        self._state = "warn"
+        self._set_activity("Dibatalkan")
         self.workers.cancel_group(self, "turn")
         self._busy = False
+        self._thinking_stop()
         self._refocus_input()
 
     def action_quit_maybe(self) -> None:

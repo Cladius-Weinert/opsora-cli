@@ -6,8 +6,9 @@ and renders tokens in real-time using Rich Live display.
 
 from __future__ import annotations
 
+import codecs
 import json
-from typing import Any, Generator, Optional
+from typing import Any, Generator, Iterator, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -32,14 +33,89 @@ def parse_sse_line(line: str) -> Optional[dict]:
     return None
 
 
+def iter_sse_events(lines: Iterator[str]) -> Generator[dict, None, None]:
+    """Parse an iterable of SSE lines into complete events.
+
+    Consecutive ``data:`` lines are joined with ``\\n`` before JSON parsing, per
+    the SSE spec. A blank line terminates the current event. Comment lines
+    (``:...``) and non-data lines are ignored. A pending event is flushed at
+    EOF even without a trailing blank line. ``[DONE]`` yields ``{"done": True}``
+    and stops. Invalid JSON events are skipped.
+    """
+    data_lines: list[str] = []
+
+    def _flush() -> Generator[dict, None, None]:
+        nonlocal data_lines
+        if not data_lines:
+            return
+        joined = "\n".join(data_lines)
+        data_lines = []
+        if joined == "[DONE]":
+            yield {"done": True}
+            return
+        try:
+            yield json.loads(joined)
+        except json.JSONDecodeError:
+            pass
+
+    for line in lines:
+        s = line.strip()
+        if not s:
+            # blank line — flush pending event
+            yield from _flush()
+            continue
+        if s.startswith(":"):
+            # comment line — ignore
+            continue
+        if s.startswith("data:"):
+            payload = s[5:].strip()
+            data_lines.append(payload)
+            continue
+        # non-data, non-blank, non-comment line — ignore (do NOT flush)
+
+    # EOF flush
+    yield from _flush()
+
+
 def accumulate_tool_call(deltas: list[dict]) -> list[dict]:
-    """Merge streaming tool_call deltas into complete tool calls."""
-    calls: dict[int, dict] = {}
+    """Merge streaming tool_call deltas into complete tool calls.
+
+    Rules:
+    - Delta HAS ``index`` (not None) → merge into bucket keyed by that index.
+    - Delta has NO index but has a non-empty ``id`` → merge into bucket keyed
+      by that id (distinct ids ⇒ distinct calls; a new bucket per new id).
+    - Delta has NEITHER index NOR id → merge into the most recently used
+      bucket; if no bucket exists yet, create one with a unique key.
+    - Return buckets in creation/insertion order.
+    """
+    calls: dict[str, dict] = {}
+    insertion_order: list[str] = []
+    last_key: str | None = None
+    _counter = 0
+
+    def _next_key() -> str:
+        nonlocal _counter
+        _counter += 1
+        return f"_auto_{_counter}"
+
     for d in deltas:
-        idx = d.get("index", 0)
-        if idx not in calls:
-            calls[idx] = {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
-        e = calls[idx]
+        idx = d.get("index")
+        tid = d.get("id")
+
+        if idx is not None:
+            key = str(idx)
+        elif tid:
+            key = tid
+        elif last_key is not None:
+            key = last_key
+        else:
+            key = _next_key()
+
+        if key not in calls:
+            calls[key] = {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+            insertion_order.append(key)
+
+        e = calls[key]
         if d.get("id"):
             e["id"] = d["id"]
         fn = d.get("function", {})
@@ -47,7 +123,10 @@ def accumulate_tool_call(deltas: list[dict]) -> list[dict]:
             e["function"]["name"] += fn["name"]
         if fn.get("arguments"):
             e["function"]["arguments"] += fn["arguments"]
-    return [calls[k] for k in sorted(calls)]
+
+        last_key = key
+
+    return [calls[k] for k in insertion_order]
 
 
 def stream_chat_completion(
@@ -95,19 +174,24 @@ def stream_chat_completion(
         return
 
     try:
-        buf = ""
-        while True:
-            raw = resp.read(1)
-            if not raw:
-                break
-            buf += raw.decode("utf-8", errors="replace")
-            while "\n" in buf:
-                line, buf = buf.split("\n", 1)
-                parsed = parse_sse_line(line)
-                if parsed is not None:
-                    yield parsed
-                    if parsed.get("done"):
-                        return
+        decoder = codecs.getincrementaldecoder("utf-8")()
+        buf = b""
+
+        def _line_iter() -> Generator[str, None, None]:
+            nonlocal buf
+            while True:
+                raw = resp.read(4096)
+                if not raw:
+                    break
+                buf += raw
+                while b"\n" in buf:
+                    line_bytes, buf = buf.split(b"\n", 1)
+                    yield decoder.decode(line_bytes)
+            # EOF: flush remaining bytes
+            if buf:
+                yield decoder.decode(buf, True)
+
+        yield from iter_sse_events(_line_iter())
     finally:
         resp.close()
 
@@ -128,7 +212,7 @@ def render_stream(
             for chunk in chunks:
                 if "error" in chunk:
                     live.update(Text(f"⚠ {chunk['error']}", style="red"))
-                    return "", []
+                    return full_text, accumulate_tool_call(tool_deltas) if tool_deltas else []
                 if chunk.get("done"):
                     break
 

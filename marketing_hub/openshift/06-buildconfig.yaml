@@ -11,7 +11,7 @@ spec:
     type: Git
     git:
       uri: https://github.com/Cladius-Weinert/opsora-cli.git
-      ref: main
+      ref: marketing-hub-deploy
     contextDir: marketing_hub
   strategy:
     type: Docker

@@ -1,0 +1,64 @@
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: opsora-marketing-hub
+  namespace: opsora-dev
+  labels:
+    app: opsora-marketing-hub
+spec:
+  runPolicy: Serial
+  source:
+    type: Git
+    git:
+      uri: https://github.com/Cladius-Weinert/opsora-cli.git
+      ref: main
+    contextDir: marketing_hub
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+      buildArgs:
+        - name: BUILD_DATE
+          value: "{{ .BuildDate }}"
+        - name: VCS_REF
+          value: "{{ .VCSRef }}"
+      noCache: false
+  output:
+    to:
+      kind: ImageStreamTag
+      name: opsora-marketing-hub:latest
+  triggers:
+    - type: GitHub
+      github:
+        secret: opsora-github-webhook-secret
+    - type: Generic
+      generic:
+        secret: opsora-generic-webhook-secret
+    - type: ImageChange
+    - type: ConfigChange
+  resources:
+    limits:
+      cpu: "2000m"
+      memory: "4Gi"
+  nodeSelector: null
+  serviceAccount: opsora-marketing-hub-builder
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: opsora-marketing-hub
+  namespace: opsora-dev
+  labels:
+    app: opsora-marketing-hub
+spec:
+  lookupPolicy:
+    local: true
+  tags:
+    - name: latest
+      from:
+        kind: DockerImage
+        name: opsora-marketing-hub:latest
+      importPolicy:
+        scheduled: true
+      referencePolicy:
+        type: Local

@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: opsora-dev
+
+resources:
+  - 01-configmap.yaml
+  - 02-secret.yaml
+  - 03-deployment.yaml
+  - 04-service-route.yaml
+  - 05-rbac.yaml
+  - 06-buildconfig.yaml
+
+commonLabels:
+  app: opsora-marketing-hub
+  managed-by: kustomize
+
+images:
+  - name: opsora-marketing-hub
+    newTag: latest

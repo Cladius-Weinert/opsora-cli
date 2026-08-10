@@ -1,0 +1,115 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opsora-marketing-hub
+  namespace: opsora-dev
+  labels:
+    app: opsora-marketing-hub
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opsora-marketing-hub-builder
+  namespace: opsora-dev
+  labels:
+    app: opsora-marketing-hub
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opsora-marketing-hub-builder
+  namespace: opsora-dev
+rules:
+  - apiGroups:
+      - ""
+      - "build.openshift.io"
+      - "image.openshift.io"
+    resources:
+      - builds
+      - builds/details
+      - builds/log
+      - buildconfigs
+      - buildconfigs/instantiate
+      - buildconfigs/webhooks
+      - imagestreams
+      - imagestreams/layers
+      - imagestreamtags
+      - imagestreamimages
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+      - pods/log
+      - pods/exec
+      - secrets
+      - configmaps
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opsora-marketing-hub-builder
+  namespace: opsora-dev
+subjects:
+  - kind: ServiceAccount
+    name: opsora-marketing-hub-builder
+    namespace: opsora-dev
+roleRef:
+  kind: Role
+  name: opsora-marketing-hub-builder
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opsora-marketing-hub-deploy
+  namespace: opsora-dev
+rules:
+  - apiGroups:
+      - ""
+      - "apps"
+      - "route.openshift.io"
+    resources:
+      - deployments
+      - deployments/scale
+      - deployments/rollback
+      - services
+      - routes
+      - pods
+      - pods/log
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opsora-marketing-hub-deploy
+  namespace: opsora-dev
+subjects:
+  - kind: ServiceAccount
+    name: opsora-marketing-hub
+    namespace: opsora-dev
+roleRef:
+  kind: Role
+  name: opsora-marketing-hub-deploy
+  apiGroup: rbac.authorization.k8s.io

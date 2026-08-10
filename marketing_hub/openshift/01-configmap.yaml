@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opsora-marketing-hub-config
+  namespace: opsora-dev
+  labels:
+    app: opsora-marketing-hub
+data:
+  PORT: "8080"
+  HOST: "0.0.0.0"
+  LOG_LEVEL: "INFO"
+  ENVIRONMENT: "production"
+  MARKETING_CONTENT_MODEL: "nvidia/nemotron-3-super-120b-a12b"
+  MARKETING_TEMPERATURE: "0.7"
+  MARKETING_MAX_TOKENS: "2048"
+  MARKETING_SCHEDULE_TIMEZONE: "Asia/Jakarta"
+  MARKETING_DEFAULT_SCHEDULE: "0 9 * * *"
+  MARKETING_ANALYTICS_RETENTION_DAYS: "90"
+  MARKETING_REPORT_SCHEDULE: "0 9 * * 1"

@@ -174,7 +174,9 @@ def compress(messages: list[dict], token_budget: int = 24000) -> list[dict]:
     }
 
     # Split into categories
-    system_msgs, keep_msgs, compress_msgs = [], [], []
+    system_msgs: list[dict] = []  # type: ignore[type-arg]
+    keep_msgs: list[dict] = []  # type: ignore[type-arg]
+    compress_msgs: list[dict] = []  # type: ignore[type-arg]
     for i, m in enumerate(messages):
         role = m.get("role", "")
         if role == "system":

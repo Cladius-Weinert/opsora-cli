@@ -131,7 +131,7 @@ def index_workspace(workspace_root: str = "/root", max_files: int = 200) -> dict
             "VALUES (?, ?, 'file', ?, 1, ?, ?)",
             (fp_str, fpath.name, lang, _content_hash(text), time.time()),
         )
-        file_id = cur.lastrowid
+        file_id = int(cur.lastrowid or 0)
         node_map[fp_str] = file_id
 
         # FTS5 index
@@ -155,7 +155,7 @@ def index_workspace(workspace_root: str = "/root", max_files: int = 200) -> dict
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (fp_str, ent["name"], ent["type"], lang, ent["line"], time.time()),
             )
-            ent_id = cur2.lastrowid
+            ent_id = int(cur2.lastrowid or 0)
             node_map[ent["name"]] = ent_id
             # contains edge: file -> entity
             conn.execute(

@@ -220,7 +220,7 @@ def analyze_screenshot(prompt: str = "Analyze this terminal screenshot. What do 
         "/sdcard/Pictures/Screenshots",
     ]
     latest = None
-    latest_time = 0
+    latest_time: float = 0.0
 
     for d in search_dirs:
         p = Path(d)

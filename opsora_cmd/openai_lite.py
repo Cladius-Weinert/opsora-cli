@@ -28,8 +28,8 @@ class _Message:
     content: Optional[str] = None
     tool_calls: Optional[list[_ToolCall]] = None
 
-    def model_dump(self, exclude_none: bool = False) -> dict:
-        d = {"role": self.role}
+    def model_dump(self, exclude_none: bool = False) -> dict[str, Any]:
+        d: dict[str, Any] = {"role": self.role}
         if self.content is not None:
             d["content"] = self.content
         if self.tool_calls:

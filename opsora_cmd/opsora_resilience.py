@@ -696,10 +696,10 @@ class StructuredLogger:
         self._configure_sink(sink)
 
     def _configure_sink(self, sink: Optional[str]) -> None:
-        for handler in list(self._logger.handlers):
-            self._logger.removeHandler(handler)
+        for _h in list(self._logger.handlers):
+            self._logger.removeHandler(_h)
             try:
-                handler.close()
+                _h.close()
             except Exception:  # noqa: BLE001
                 pass
 
@@ -712,12 +712,14 @@ class StructuredLogger:
                 self._sink_effective = "off"
                 return
             if sink_norm == "stderr":
-                import sys
-                handler: logging.Handler = logging.StreamHandler(sys.stderr)
+                import sys as _sys_stderr  # noqa: PLC0415
+
+                handler: logging.Handler = logging.StreamHandler(_sys_stderr.stderr)
                 self._sink_effective = "stderr"
             elif sink_norm == "stdout":
-                import sys
-                handler = logging.StreamHandler(sys.stdout)
+                import sys as _sys_stdout  # noqa: PLC0415
+
+                handler = logging.StreamHandler(_sys_stdout.stdout)
                 self._sink_effective = "stdout"
             else:
                 path = Path(sink).expanduser()

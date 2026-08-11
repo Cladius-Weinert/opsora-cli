@@ -19,7 +19,14 @@ env/
 .env.*
 opsora_env
 ~/.opsora_env
+.opsora_env
+.opsora_env.*
+*.env.bak*
+secrets.env
 config/tencent-cloud-config.yaml
+credentials.json
+client_creds.json
+.mcp-tokens.json
 
 # IDE
 .idea/

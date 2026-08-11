@@ -105,11 +105,11 @@ class Analytics:
 
         conn.close()
 
-        platforms = defaultdict(dict)
+        platforms: dict[str, dict] = defaultdict(dict)  # type: ignore[arg-type]
         for platform, metric, total, count in rows:
             platforms[platform][metric] = {"total": total, "count": count, "avg": total / count if count else 0}
 
-        daily_data = defaultdict(lambda: defaultdict(dict))
+        daily_data: dict[str, dict] = defaultdict(lambda: defaultdict(dict))  # type: ignore[arg-type]
         for date, platform, metric, total in daily:
             daily_data[date][platform][metric] = total
 

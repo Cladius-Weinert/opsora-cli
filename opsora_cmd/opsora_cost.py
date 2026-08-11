@@ -136,7 +136,9 @@ class CostTracker:
 
     def session_total(self) -> dict:
         """Return aggregated totals: total_tokens, total_cost, by_model breakdown."""
-        total_tokens, total_cost, by_model = 0, 0.0, {}
+        total_tokens: int = 0
+        total_cost: float = 0.0
+        by_model: dict[str, dict[str, Any]] = {}
         for e in self._entries:
             total_tokens += e.total_tokens; total_cost += e.cost_usd
             b = by_model.setdefault(e.model, {"tokens": 0, "cost": 0.0, "calls": 0})

@@ -81,7 +81,7 @@ def _safe_grep_search(pattern: str, path: str = ".", file_type: Optional[str] = 
 def solve_problem(
     problem: str,
     context: Optional[str] = None,
-    history: List[Dict[str, Any]] = None,
+    history: Optional[List[Dict[str, Any]]] = None,
     max_steps: int = 5,
 ) -> Dict[str, Any]:
     """
@@ -325,11 +325,12 @@ def solve_problem(
 
     # STEP 4: VERIFY — Cek validitas langkah & output
     verify = "VERIFY: "
-    if act_result["output"].startswith("ERROR:") or act_result["output"].startswith("BLOCKED:"):
+    _act_out: str = str(act_result["output"])
+    if _act_out.startswith("ERROR:") or _act_out.startswith("BLOCKED:"):
         verify += "Terdapat kesalahan atau pemblokiran saat menjalankan tindakan. Tidak dapat melanjutkan dengan otomatis."
-    elif "tidak ditemukan" in act_result["output"].lower() or "not found" in act_result["output"].lower():
+    elif "tidak ditemukan" in _act_out.lower() or "not found" in _act_out.lower():
         verify += "Tindakan tidak menghasilkan hasil yang diharapkan. Pertimbangkan pendekatan alternatif atau periksa kembali masukan."
-    elif len(act_result["output"]) > 20:
+    elif len(_act_out) > 20:
         verify += "Tindakan berhasil menghasilkan output yang dapat dianalisis. Lanjutkan ke evaluasi lebih dalam."
     else:
         verify += "Tindakan berjalan tetapi outputnya terbatas. Pertimbangkan untuk mendapatkan lebih banyak informasi."
@@ -343,11 +344,11 @@ def solve_problem(
     else:
         report_parts.append("sedang dianalisis untuk tindakan lanjutan.")
     
-    if not act_result["output"].startswith(("ERROR:", "BLOCKED:")) and len(act_result["output"]) > 10:
-        report_parts.append(f" Temuan awal: {act_result['output'][:100]}{'...' if len(act_result['output']) > 100 else ''}")
+    if not _act_out.startswith(("ERROR:", "BLOCKED:")) and len(_act_out) > 10:
+        report_parts.append(f" Temuan awal: {_act_out[:100]}{'...' if len(_act_out) > 100 else ''}")
     else:
         report_parts.append(" Tidak dapat memperoleh informasi awal yang berguna.")
-    
+
     report_parts.append(f" Langkah selanjutnya yang disarankan: {act_result['next_action']}")
     report = " ".join(report_parts)
 
@@ -358,7 +359,7 @@ def solve_problem(
         "act": act_result,
         "verify": verify,
         "report": report,
-        "status": "completed" if not (act_result["output"].startswith("ERROR:") or act_result["output"].startswith("BLOCKED:")) else "failed",
+        "status": "completed" if not (_act_out.startswith("ERROR:") or _act_out.startswith("BLOCKED:")) else "failed",
         "next_step": act_result["next_action"],
         "details": act_result.get("details", "")
     }

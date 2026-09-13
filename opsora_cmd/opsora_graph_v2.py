@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import sqlite3
 import time
 from pathlib import Path
 
-DB_PATH = Path("/root/.opsora/graph.db")
+def _opsora_dir() -> Path:
+    return Path(os.environ.get("OPSORA_WORKSPACE_ROOT", str(Path.home()))) / ".opsora"
+DB_PATH = _opsora_dir() / "graph.db"
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist",
              "build", ".opsora", ".cache", ".npm", ".cargo", ".local", ".config"}

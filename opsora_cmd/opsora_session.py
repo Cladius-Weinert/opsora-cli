@@ -6,6 +6,7 @@ Save, resume, list, and search conversation sessions.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 import uuid
@@ -13,7 +14,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-DB_PATH = Path("/root/.opsora/sessions.db")
+def _opsora_dir() -> Path:
+    return Path(os.environ.get("OPSORA_WORKSPACE_ROOT", str(Path.home()))) / ".opsora"
+DB_PATH = _opsora_dir() / "sessions.db"
 
 
 def _conn() -> sqlite3.Connection:

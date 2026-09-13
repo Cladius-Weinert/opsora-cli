@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 from pathlib import Path
 from typing import Any
 
-DB_PATH = Path("/root/.opsora/memory.db")
+def _opsora_dir() -> Path:
+    return Path(os.environ.get("OPSORA_WORKSPACE_ROOT", str(Path.home()))) / ".opsora"
+# single DB — keep both memory.py and memory_v2 on same file
+DB_PATH = _opsora_dir() / "memory.db"
 
 
 def _get_conn() -> sqlite3.Connection:

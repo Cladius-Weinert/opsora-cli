@@ -7,12 +7,15 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import os
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
-PLUGINS_DIR = Path("/root/.opsora/plugins")
+def _opsora_dir() -> Path:
+    return Path(os.environ.get("OPSORA_WORKSPACE_ROOT", str(Path.home()))) / ".opsora"
+PLUGINS_DIR = _opsora_dir() / "plugins"
 
 
 class OpsoraPlugin(ABC):

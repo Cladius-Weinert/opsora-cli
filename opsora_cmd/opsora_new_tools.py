@@ -6,6 +6,7 @@ Stdlib-only tools for the Opsora agent. No external dependencies.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import urllib.error
@@ -14,7 +15,9 @@ import urllib.request
 from pathlib import Path
 
 TOOL_MAX_OUTPUT = 30_000
-OPSORA_DIR = Path("/root/.opsora")
+def _opsora_dir() -> Path:
+    return Path(os.environ.get("OPSORA_WORKSPACE_ROOT", str(Path.home()))) / ".opsora"
+OPSORA_DIR = _opsora_dir()
 
 
 def _truncate(text: str, limit: int = TOOL_MAX_OUTPUT) -> str:
@@ -142,7 +145,7 @@ def _validate_select_only(sql: str) -> tuple[bool, str]:
     return True, ""
 
 
-def db_query(sql: str, db_path: str = "/root/.opsora/memory.db") -> str:
+def db_query(sql: str, db_path: str = "") -> str:
     """Execute a read-only SQLite query and return formatted results."""
     if not sql or not sql.strip():
         return "❌ Query SQL kosong."
@@ -152,6 +155,8 @@ def db_query(sql: str, db_path: str = "/root/.opsora/memory.db") -> str:
     if not valid:
         return f"🚫 Query diblokir: {error}"
 
+    if not db_path:
+        db_path = str(_opsora_dir() / "memory.db")
     path = Path(db_path)
     if not path.exists():
         # Auto-detect available databases
@@ -206,7 +211,7 @@ def db_query_schema() -> dict:
                 "type": "object",
                 "properties": {
                     "sql": {"type": "string", "description": "SQL SELECT query"},
-                    "db_path": {"type": "string", "description": "Path to .db file", "default": "/root/.opsora/memory.db"},
+                    "db_path": {"type": "string", "description": "Path to .db file", "default": str(_opsora_dir() / "memory.db")},
                 },
                 "required": ["sql"],
             },

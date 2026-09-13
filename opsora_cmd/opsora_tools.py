@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-WORKSPACE_ROOT = Path("/root")
+WORKSPACE_ROOT = Path(os.environ.get("OPSORA_WORKSPACE_ROOT", str(Path.home())))
 OPSORA_DIR = WORKSPACE_ROOT / ".opsora"
 
 

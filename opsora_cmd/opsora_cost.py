@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 
 # Path to the external pricing config. Tests may monkeypatch this.
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "model_costs.json"
+# Single source — preferred over legacy CONFIG_PATH
+_SINGLE_SOURCE_CANDIDATES = [
+    Path.home() / "config" / "pricing.json",
+    Path("/root/config/pricing.json"),
+    Path(__file__).resolve().parents[2] / "config" / "pricing.json",
+]
 
 # Pricing: (input $/M tokens, output $/M tokens)
 # Built-in fallback table, mirroring config/model_costs.json, used when the
@@ -24,7 +30,7 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "model_costs.j
 _BUILTIN_MODEL_COSTS: dict[str, tuple[float, float]] = {
     "qwen-plus": (0.40, 1.20), "qwen-turbo": (0.05, 0.20), "qwen-max": (2.00, 6.00),
     "qwen3-coder-flash": (0.15, 0.60),
-    "meta/llama-3.1-70b-instruct": (0.35, 0.70), "meta/llama-3.1-8b-instruct": (0.05, 0.10),
+    "nvidia/llama-3.1-nemotron-70b-instruct": (0.35, 0.70), "nvidia/mistral-nemo-minitron-8b-8k-instruct": (0.05, 0.10),
     "hy3": (0.132, 0.132), "kimi-k3": (0.20, 0.60), "deepseek-v4-flash": (0.02, 0.02),
 }
 _BUILTIN_DEFAULT_COST: tuple[float, float] = (0.30, 0.60)
@@ -35,17 +41,41 @@ def _valid_rate(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
 
 
-def _load_model_costs(path: Optional[Path] = None) -> tuple[dict[str, tuple[float, float]], tuple[float, float]]:
-    """Load per-model pricing from ``path`` (default: :data:`CONFIG_PATH`).
+def _resolve_pricing_path() -> Path | None:
+    """Return the pricing file path to load.
 
-    Returns ``(model_costs, default_cost)`` where rates are
-    ``(input $/M tokens, output $/M tokens)`` tuples. Entries from the file
-    override the built-in table; individual malformed entries are skipped
-    with a warning. If the file is missing, unreadable, or structurally
-    invalid, a warning is logged and the built-in table is returned.
-    This function never raises.
+    Priority order:
+    1. CONFIG_PATH (config/model_costs.json) — canonical CLI pricing source.
+       If it exists on disk, use it directly.
+    2. If CONFIG_PATH has been monkeypatched to a non-existent path (test
+       scenario), return it so the caller's FileNotFoundError branch triggers
+       and built-in defaults are used — without falling through to pricing.json.
+    3. Single-source candidates (~/config/pricing.json etc.) — used only when
+       the default CONFIG_PATH does not exist on disk.
+    4. Return None if nothing found (caller uses built-in defaults).
     """
-    target = Path(path) if path is not None else CONFIG_PATH
+    # Primary: CONFIG_PATH (model_costs.json) always wins when present.
+    if CONFIG_PATH.exists():
+        return CONFIG_PATH
+    # If CONFIG_PATH was monkeypatched to a non-existent/bad path, return it
+    # so the caller's error-handling fires and uses built-in defaults.
+    _default_config_path = Path(__file__).resolve().parent.parent / "config" / "model_costs.json"
+    if CONFIG_PATH != _default_config_path:
+        return CONFIG_PATH  # intentionally non-existent — triggers fallback
+    # Fallback: single-source candidates when default config is absent
+    for p in _SINGLE_SOURCE_CANDIDATES:
+        if p.exists():
+            return p
+    return None
+
+
+def _load_model_costs(path: Optional[Path] = None) -> tuple[dict[str, tuple[float, float]], tuple[float, float]]:
+    """Load per-model pricing from ``path`` (default: single-source or CONFIG_PATH)."""
+    if path is not None:
+        target = Path(path)
+    else:
+        resolved = _resolve_pricing_path()
+        target = resolved if resolved is not None else CONFIG_PATH
     try:
         data = json.loads(target.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -63,6 +93,9 @@ def _load_model_costs(path: Optional[Path] = None) -> tuple[dict[str, tuple[floa
 
     costs = dict(_BUILTIN_MODEL_COSTS)
     for model, rates in data["models"].items():
+        # Support both shapes: array [in,out] and object {input,output}
+        if isinstance(rates, dict) and "input" in rates and "output" in rates:
+            rates = [rates["input"], rates["output"]]
         if (isinstance(rates, (list, tuple)) and len(rates) == 2 and all(_valid_rate(v) for v in rates)):
             costs[str(model)] = (float(rates[0]), float(rates[1]))
         else:
@@ -70,6 +103,9 @@ def _load_model_costs(path: Optional[Path] = None) -> tuple[dict[str, tuple[floa
 
     default_cost = _BUILTIN_DEFAULT_COST
     dc = data.get("default_cost")
+    # single-source uses "default_cost" array too — also accept {input,output}
+    if isinstance(dc, dict) and "input" in dc and "output" in dc:
+        dc = [dc["input"], dc["output"]]
     if dc is not None:
         if isinstance(dc, (list, tuple)) and len(dc) == 2 and all(_valid_rate(v) for v in dc):
             default_cost = (float(dc[0]), float(dc[1]))

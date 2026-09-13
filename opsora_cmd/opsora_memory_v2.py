@@ -12,7 +12,9 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-DB_PATH = Path("/root/.opsora/memory.db")
+def _opsora_dir() -> Path:
+    return Path(os.environ.get("OPSORA_WORKSPACE_ROOT", str(Path.home()))) / ".opsora"
+DB_PATH = _opsora_dir() / "memory.db"
 
 DASHSCOPE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/embeddings"
 DASHSCOPE_MODEL = "text-embedding-v3"

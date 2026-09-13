@@ -1,7 +1,9 @@
 """Opsora Intent Router — Smart model routing based on prompt analysis."""
 from __future__ import annotations
+import json
 import re
 import os
+from pathlib import Path
 from typing import Optional
 
 # Import provider models dynamically
@@ -118,7 +120,7 @@ class NoCapableModelError(RuntimeError):
     """
 
 # Default model costs per 1M tokens (input, output) in USD
-_DEFAULT_COSTS: dict[str, tuple[float, float]] = {
+_FALLBACK_DEFAULT_COSTS: dict[str, tuple[float, float]] = {
     "qwen-plus": (0.40, 1.20),
     "qwen-turbo": (0.05, 0.20),
     "qwen-max": (2.00, 6.00),
@@ -127,18 +129,52 @@ _DEFAULT_COSTS: dict[str, tuple[float, float]] = {
     "qwen3.7-max": (1.50, 4.50),
     "qwen3.7-plus": (0.40, 1.20),
     "qwen3.7-flash": (0.10, 0.30),
-    "meta/llama-3.1-8b-instruct": (0.00, 0.00),
-    "meta/llama-3.1-70b-instruct": (0.00, 0.00),
+    "nvidia/mistral-nemo-minitron-8b-8k-instruct": (0.00, 0.00),
+    "nvidia/llama-3.1-nemotron-70b-instruct": (0.00, 0.00),
     "nvidia/nemotron-3-super-120b-a12b": (0.00, 0.00),
     "nvidia/nemotron-3-ultra-550b-a55b": (0.00, 0.00),
-    "nvidia/llama-3.3-nemotron-super-49b-v1.5": (0.00, 0.00),
-    "nvidia/nemotron-3-nano-30b-a3b": (0.00, 0.00),
-    "nvidia/nvidia-nemotron-nano-9b-v2": (0.00, 0.00),
-    "nvidia/nemotron-mini-4b-instruct": (0.00, 0.00),
+    "nvidia/llama-3.1-nemotron-51b-instruct": (0.00, 0.00),
+    "nvidia/nemotron-nano-3-30b-a3b": (0.00, 0.00),
+    "mistralai/mistral-7b-instruct-v0.3": (0.00, 0.00),
     "mistralai/mistral-nemotron": (0.00, 0.00),
-    "mistralai/mistral-medium-3.5-128b": (0.00, 0.00),
-    "stepfun-ai/step-3.7-flash": (0.00, 0.00),
+    "deepseek-ai/deepseek-v4-flash-0731": (0.00, 0.00),
+    "deepseek-ai/deepseek-coder-6.7b-instruct": (0.00, 0.00),
+    "bigcode/starcoder2-15b": (0.00, 0.00),
+    "meta/llama-3.2-90b-vision-instruct": (0.00, 0.00),
+    "meta/llama-3.2-11b-vision-instruct": (0.00, 0.00),
 }
+
+
+def _load_routing_pricing() -> dict[str, tuple[float, float]]:
+    """Load pricing from ~/config/pricing.json single source (both shapes).
+
+    Always merges with _FALLBACK_DEFAULT_COSTS as the base so legacy model names
+    (qwen-turbo, etc.) remain present even if missing from the pricing file.
+    The pricing file values override the fallback when both define the same model.
+    """
+    # Start with built-in fallback so legacy models are always present
+    result: dict[str, tuple[float, float]] = dict(_FALLBACK_DEFAULT_COSTS)
+    cands = [Path.home() / "config" / "pricing.json", Path("/root/config/pricing.json")]
+    for p in cands:
+        try:
+            if p.exists():
+                data = json.loads(p.read_text(encoding="utf-8"))
+                models = data.get("models", {})
+                loaded: dict[str, tuple[float, float]] = {}
+                for k, v in models.items():
+                    if isinstance(v, dict) and "input" in v and "output" in v:
+                        loaded[k] = (float(v["input"]), float(v["output"]))
+                    elif isinstance(v, (list, tuple)) and len(v) == 2:
+                        loaded[k] = (float(v[0]), float(v[1]))
+                if loaded:
+                    result.update(loaded)  # pricing file overrides fallback
+                    return result
+        except Exception:
+            continue
+    return result
+
+
+_DEFAULT_COSTS = _load_routing_pricing()
 
 class IntentRouter:
     """Classify user prompts into intent categories for smart routing."""

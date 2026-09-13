@@ -114,9 +114,12 @@ from opsora_agent import AutonomousAgent, abort_agent, reset_abort, is_aborted
 # Workspace Configuration
 # ============================================================================
 
-WORKSPACE_ROOT = Path(os.environ.get("OPSORA_WORKSPACE_ROOT", "/root"))
+WORKSPACE_ROOT = Path(os.environ.get("OPSORA_WORKSPACE_ROOT", str(Path.home()) if Path.home() != Path("/") else "/root"))
 OPSORA_DIR = WORKSPACE_ROOT / ".opsora"
-OPSORA_DIR.mkdir(exist_ok=True)
+try:
+    OPSORA_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
 
 # Configuration defaults
 DEFAULT_MAX_TOKENS = 4096
@@ -275,20 +278,22 @@ opsora_api_client = None  # Lazy initialization
 
 
 PROVIDER_MODELS = {
-    # Verified working models (2026-07-31) — 18 total across 2 providers
-    "alibaba": "qwen3-coder-flash,qwen-plus,qwen-max,qwen3.7-flash,qwen3.7-plus,qwen3.7-max",
+    # Verified working models (2026-09-13) — NVIDIA /models + DashScope free-tier tests
+    "alibaba": "qwen3-coder-flash,qwen-plus,qwen-turbo,qwen3-max,qwen3-coder-plus,glm-5.1",
     "nvidia": (
         "nvidia/nemotron-3-ultra-550b-a55b,"           # 550B MoE monster (1.7s)
-        "mistralai/mistral-medium-3.5-128b,"            # 128B Mistral (1.2s)
         "nvidia/nemotron-3-super-120b-a12b,"            # 120B MoE (1.1s)
-        "meta/llama-3.1-70b-instruct,"                  # 70B reliable (1.1s)
-        "nvidia/llama-3.3-nemotron-super-49b-v1.5,"    # 49B Nemotron (2.1s)
-        "nvidia/nemotron-3-nano-30b-a3b,"               # 30B MoE, 3B active (1.5s)
-        "nvidia/nvidia-nemotron-nano-9b-v2,"            # 9B nano (1.5s)
+        "nvidia/llama-3.1-nemotron-70b-instruct,"      # 70B Nemotron (1.1s)
+        "nvidia/llama-3.1-nemotron-51b-instruct,"      # 51B Nemotron (2.1s)
+        "nvidia/nemotron-nano-3-30b-a3b,"               # 30B MoE, 3B active (1.5s)
+        "nvidia/mistral-nemo-minitron-8b-8k-instruct,"  # 8B ultra-fast (0.8s)
         "mistralai/mistral-nemotron,"                   # Mistral+NVIDIA collab (1.1s)
-        "stepfun-ai/step-3.7-flash,"                    # StepFun flash (1.6s)
-        "nvidia/nemotron-mini-4b-instruct,"             # 4B ultra-fast (1.1s)
-        "meta/llama-3.1-8b-instruct"                    # 8B fastest (0.8s)
+        "mistralai/mistral-7b-instruct-v0.3,"           # 7B fast (0.8s)
+        "deepseek-ai/deepseek-v4-flash-0731,"           # Code specialist (1.2s)
+        "deepseek-ai/deepseek-coder-6.7b-instruct,"     # 6.7B coder (1.0s)
+        "bigcode/starcoder2-15b,"                       # 15B coder (1.3s)
+        "meta/llama-3.2-90b-vision-instruct,"           # 90B vision (1.5s)
+        "meta/llama-3.2-11b-vision-instruct"            # 11B vision (1.0s)
     ),
     # Legacy providers
     "model_studio": "qwen-plus,qwen-max",
@@ -301,38 +306,36 @@ PROVIDER_MODELS = {
 # Model routing tiers — auto_select_model uses these
 POWER_MODELS = [
     ("nvidia", "nvidia/nemotron-3-super-120b-a12b"),      # 120B MoE reasoning (1.1s) ✅
-    ("nvidia", "meta/llama-3.1-70b-instruct"),            # 70B reliable (1.1s) ⚠️ timeout
+    ("nvidia", "nvidia/llama-3.1-nemotron-70b-instruct"), # 70B Nemotron (1.1s) ✅
     ("nvidia", "nvidia/nemotron-3-ultra-550b-a55b"),      # 550B MoE (1.7s) ✅
-    ("nvidia", "nvidia/nemotron-3-nano-30b-a3b"),         # 30B MoE (1.5s)
-    ("nvidia", "mistralai/mistral-medium-3.5-128b"),      # 128B Mistral (1.2s)
-    ("alibaba", "qwen-max"),                              # Best overall (1.2s) ⚠️ key invalid
-    ("alibaba", "qwen3.7-max"),                           # Strong reasoning (3.1s) ⚠️ key invalid
+    ("nvidia", "nvidia/nemotron-nano-3-30b-a3b"),         # 30B MoE (1.5s) ✅
+    ("alibaba", "qwen3-max"),                             # Best overall (1.2s) ✅ free tier
+    ("alibaba", "glm-5.1"),                               # Strong reasoning (3.1s) ✅ free tier
 ]
 FAST_MODELS = [
-    ("nvidia", "meta/llama-3.1-8b-instruct"),             # 8B fastest (0.8s) ✅
-    ("nvidia", "nvidia/nemotron-mini-4b-instruct"),       # 4B ultra-fast (1.1s) ✅
-    ("nvidia", "nvidia/nvidia-nemotron-nano-9b-v2"),      # 9B nano (1.5s)
-    ("nvidia", "mistralai/mistral-nemotron"),             # Mistral collab (1.1s)
-    ("alibaba", "qwen3-coder-flash"),                     # Coding specialist (1.3s) ⚠️ key invalid
-    ("alibaba", "qwen-plus"),                             # All-rounder (1.4s) ⚠️ key invalid
-    ("alibaba", "qwen3.7-flash"),                         # Flash reasoning (1.9s) ⚠️ key invalid
+    ("nvidia", "nvidia/mistral-nemo-minitron-8b-8k-instruct"), # 8B ultra-fast (0.8s) ✅
+    ("nvidia", "mistralai/mistral-7b-instruct-v0.3"),      # 7B fast (0.8s) ✅
+    ("nvidia", "nvidia/nemotron-nano-3-30b-a3b"),          # 30B MoE (1.5s) ✅
+    ("nvidia", "mistralai/mistral-nemotron"),              # Mistral collab (1.1s) ✅
+    ("alibaba", "qwen-turbo"),                             # Fastest qwen (0.9s) ✅ free tier
+    ("alibaba", "qwen-plus"),                              # All-rounder (1.4s) ✅ free tier
+    ("alibaba", "qwen-flash"),                             # Flash reasoning (1.9s) ✅ free tier
 ]
 REASONING_MODELS = [
     ("nvidia", "nvidia/nemotron-3-super-120b-a12b"),      # 120B MoE (1.1s) ✅
     ("nvidia", "nvidia/nemotron-3-ultra-550b-a55b"),      # 550B reasoning (1.7s) ✅
-    ("nvidia", "nvidia/nemotron-3-nano-30b-a3b"),         # 30B MoE (1.5s)
-    ("nvidia", "meta/llama-3.1-70b-instruct"),            # 70B reasoning (1.1s) ⚠️ timeout
-    ("alibaba", "qwen3.7-max"),                           # Best reasoning (3.1s) ⚠️ key invalid
-    ("alibaba", "qwen3.7-plus"),                          # Balanced (4.1s) ⚠️ key invalid
+    ("nvidia", "nvidia/llama-3.1-nemotron-70b-instruct"), # 70B reasoning (1.1s) ✅
+    ("alibaba", "qwen3-max"),                             # Best reasoning (3.1s) ✅ free tier
+    ("alibaba", "qwq-plus"),                              # QwQ reasoning (2.5s) ✅ free tier
 ]
 CODING_MODELS = [
-    ("nvidia", "deepseek-ai/deepseek-v4-flash"),          # Code specialist (1.2s) ⚠️ 529 overloaded
+    ("nvidia", "deepseek-ai/deepseek-v4-flash-0731"),     # Code specialist (1.2s) ✅
+    ("nvidia", "deepseek-ai/deepseek-coder-6.7b-instruct"), # 6.7B coder (1.0s) ✅
     ("nvidia", "nvidia/nemotron-3-super-120b-a12b"),      # 120B MoE good for code (1.1s) ✅
-    ("nvidia", "meta/llama-3.1-70b-instruct"),            # 70B strong coding (1.1s) ⚠️ timeout
-    ("nvidia", "nvidia/llama-3.3-nemotron-super-49b-v1.5"), # 49B coding (2.1s)
-    ("nvidia", "mistralai/mistral-nemotron"),             # Mistral code (1.1s)
-    ("alibaba", "qwen3-coder-flash"),                     # Code specialist (1.3s) ⚠️ key invalid
-    ("alibaba", "qwen-plus"),                             # Good coding (1.4s) ⚠️ key invalid
+    ("nvidia", "bigcode/starcoder2-15b"),                 # 15B coding (1.3s) ✅
+    ("nvidia", "mistralai/mistral-nemotron"),             # Mistral code (1.1s) ✅
+    ("alibaba", "qwen3-coder-flash"),                     # Code specialist (1.3s) ✅ free tier
+    ("alibaba", "qwen3-coder-plus"),                      # Coder plus (1.4s) ✅ free tier
 ]
 # Vision-capable models only — image/screenshot prompts must never route to
 # text-only models (they cannot accept image input at all).
@@ -1302,8 +1305,8 @@ def compress_context(messages: list[dict], selection: Selection) -> list[dict]:
     _ctx_windows = {
         "qwen-plus": 800_000, "qwen-turbo": 800_000, "qwen-max": 800_000,
         "qwen3-coder-plus": 800_000, "qwen3-coder-flash": 800_000,
-        "meta/llama-3.1-70b-instruct": 100_000, "meta/llama-3.1-8b-instruct": 100_000,
-        "deepseek-ai/deepseek-v4-flash": 100_000, "hy3": 100_000, "kimi-k3": 100_000,
+        "nvidia/llama-3.1-nemotron-70b-instruct": 100_000, "nvidia/mistral-nemo-minitron-8b-8k-instruct": 100_000,
+        "deepseek-ai/deepseek-v4-flash-0731": 100_000, "hy3": 100_000, "kimi-k3": 100_000,
     }
     context_total = _ctx_windows.get(selection.model, 131_072)
 

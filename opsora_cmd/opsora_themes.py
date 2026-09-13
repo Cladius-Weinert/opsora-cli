@@ -26,8 +26,12 @@ muted teal accent instead of neon, no pure-saturated body text.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
+
+def _opsora_dir() -> Path:
+    return Path(os.environ.get("OPSORA_WORKSPACE_ROOT", str(Path.home()))) / ".opsora"
 
 # Color-role keys every theme must provide (used by tests to guard the
 # contract; ``name``/``description`` are metadata, not colors).
@@ -95,7 +99,7 @@ THEMES: dict[str, dict[str, str]] = {
     },
 }
 
-_THEME_PATH = Path("/root/.opsora/theme.json")
+_THEME_PATH = _opsora_dir() / "theme.json"
 
 
 def get_theme(name: str = "dark") -> dict[str, str]:
